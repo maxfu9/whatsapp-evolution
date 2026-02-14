@@ -9,63 +9,9 @@
  "engine": "InnoDB",
  "field_order": [
   "account_name",
-  "status",
-  "token",
-  "url",
-  "version",
-  "webhook_verify_token",
-  "column_break_byyq",
-  "phone_id",
-  "app_id",
-  "business_id",
-  "is_default_incoming",
-  "is_default_outgoing",
-  "allow_auto_read_receipt"
+  "status"
  ],
  "fields": [
-  {
-   "fieldname": "token",
-   "fieldtype": "Password",
-   "label": "Token",
-   "length": 300
-  },
-  {
-   "fieldname": "url",
-   "fieldtype": "Data",
-   "label": "URL"
-  },
-  {
-   "fieldname": "version",
-   "fieldtype": "Data",
-   "in_list_view": 1,
-   "label": "Version"
-  },
-  {
-   "fieldname": "phone_id",
-   "fieldtype": "Data",
-   "label": "Phone ID",
-   "unique": 1
-  },
-  {
-   "fieldname": "business_id",
-   "fieldtype": "Data",
-   "label": "Business ID"
-  },
-  {
-   "fieldname": "app_id",
-   "fieldtype": "Data",
-   "label": "App ID"
-  },
-  {
-   "fieldname": "webhook_verify_token",
-   "fieldtype": "Data",
-   "label": "Webhook Verify Token",
-   "unique": 1
-  },
-  {
-   "fieldname": "column_break_byyq",
-   "fieldtype": "Column Break"
-  },
   {
    "fieldname": "account_name",
    "fieldtype": "Data",
@@ -82,24 +28,6 @@
    "in_standard_filter": 1,
    "label": "Status",
    "options": "Active\nInactive"
-  },
-  {
-   "default": "0",
-   "fieldname": "is_default_incoming",
-   "fieldtype": "Check",
-   "label": "Is Default Incoming"
-  },
-  {
-   "default": "0",
-   "fieldname": "is_default_outgoing",
-   "fieldtype": "Check",
-   "label": "Is Default Outgoing"
-  },
-  {
-   "default": "1",
-   "fieldname": "allow_auto_read_receipt",
-   "fieldtype": "Check",
-   "label": "Allow auto read receipt"
   }
  ],
  "grid_page_length": 50,

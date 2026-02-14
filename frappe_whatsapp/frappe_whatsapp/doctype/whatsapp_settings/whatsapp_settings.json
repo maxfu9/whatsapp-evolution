@@ -6,26 +6,25 @@
  "editable_grid": 1,
  "engine": "InnoDB",
  "field_order": [
-  "default_incoming_account",
-  "column_break_xsuw",
-  "default_outgoing_account"
+  "section_break_evolution",
+  "evolution_api_base",
+  "evolution_api_token"
  ],
  "fields": [
   {
-   "fieldname": "default_incoming_account",
-   "fieldtype": "Link",
-   "label": "Default Incoming Account",
-   "options": "WhatsApp Account"
+   "fieldname": "section_break_evolution",
+   "fieldtype": "Section Break",
+   "label": "Evolution API"
   },
   {
-   "fieldname": "default_outgoing_account",
-   "fieldtype": "Link",
-   "label": "Default Outgoing Account",
-   "options": "WhatsApp Account"
+   "fieldname": "evolution_api_base",
+   "fieldtype": "Data",
+   "label": "Evolution API Base"
   },
   {
-   "fieldname": "column_break_skjo",
-   "fieldtype": "Column Break"
+   "fieldname": "evolution_api_token",
+   "fieldtype": "Password",
+   "label": "Evolution API Token"
   }
  ],
  "grid_page_length": 50,

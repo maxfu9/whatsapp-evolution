@@ -7,8 +7,13 @@ from frappe.model.document import Document
 from frappe.integrations.utils import make_post_request
 
 from frappe_whatsapp.utils import get_whatsapp_account, format_number
+from frappe_whatsapp.frappe_whatsapp.providers import EvolutionProvider
 
 class WhatsAppMessage(Document):
+    def is_evolution_enabled(self):
+        settings = frappe.get_single("WhatsApp Settings")
+        return bool(settings.get("evolution_api_base") and settings.get_password("evolution_api_token"))
+
     def validate(self):
         self.set_whatsapp_account()
 
@@ -42,6 +47,9 @@ class WhatsAppMessage(Document):
 
     def set_whatsapp_account(self):
         """Set whatsapp account to default if missing"""
+        if self.is_evolution_enabled():
+            return
+
         if not self.whatsapp_account:
             account_type = 'outgoing' if self.type == 'Outgoing' else 'incoming'
             default_whatsapp_account = get_whatsapp_account(account_type=account_type)
@@ -294,6 +302,20 @@ class WhatsAppMessage(Document):
 
     def notify(self, data):
         """Notify."""
+        if self.is_evolution_enabled():
+            if self.message_type == "Template":
+                frappe.throw(_("Template messages are not supported in Evolution mode."))
+            if self.content_type != "text":
+                frappe.throw(_("Only text messages are supported in Evolution mode."))
+
+            settings_doc = frappe.get_single("WhatsApp Settings")
+            settings = settings_doc.as_dict()
+            settings["evolution_api_token"] = settings_doc.get_password("evolution_api_token")
+            provider = EvolutionProvider(settings)
+            response = provider.send_message(format_number(self.to), self.message or "")
+            self.message_id = response.get("id") or response.get("message_id") or ""
+            return
+
         whatsapp_account = frappe.get_doc(
             "WhatsApp Account",
             self.whatsapp_account,
@@ -334,6 +356,9 @@ class WhatsAppMessage(Document):
 
     @frappe.whitelist()
     def send_read_receipt(self):
+        if self.is_evolution_enabled():
+            frappe.throw(_("Read receipts are not supported in Evolution mode."))
+
         data = {
             "messaging_product": "whatsapp",
             "status": "read",

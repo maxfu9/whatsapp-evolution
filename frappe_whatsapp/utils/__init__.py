@@ -128,15 +128,23 @@ def trigger_whatsapp_notifications(event):
 
 def get_whatsapp_account(phone_id=None, account_type='incoming'):
     """map whatsapp account with message"""
+    meta = frappe.get_meta("WhatsApp Account")
+
     if phone_id:
-        account_name = frappe.db.get_value('WhatsApp Account', {'phone_id': phone_id}, 'name')
-        if account_name:
-            return frappe.get_doc("WhatsApp Account", account_name)
+        if meta.has_field("phone_id"):
+            account_name = frappe.db.get_value('WhatsApp Account', {'phone_id': phone_id}, 'name')
+            if account_name:
+                return frappe.get_doc("WhatsApp Account", account_name)
 
     account_field_type = 'is_default_incoming' if account_type =='incoming' else 'is_default_outgoing' 
-    default_account_name = frappe.db.get_value('WhatsApp Account', {account_field_type: 1}, 'name')
-    if default_account_name:
-        return frappe.get_doc("WhatsApp Account", default_account_name)
+    if meta.has_field(account_field_type):
+        default_account_name = frappe.db.get_value('WhatsApp Account', {account_field_type: 1}, 'name')
+        if default_account_name:
+            return frappe.get_doc("WhatsApp Account", default_account_name)
+
+    fallback_account_name = frappe.db.get_value("WhatsApp Account", {"status": "Active"}, "name")
+    if fallback_account_name:
+        return frappe.get_doc("WhatsApp Account", fallback_account_name)
 
     return None
 
