@@ -1,0 +1,7 @@
+[pre_model_sync]
+
+[post_model_sync]
+# Patches added in this section will be executed after doctypes are migrated
+whatsapp_evolution.patches.set_default_in_whatsapp_settings
+whatsapp_evolution.patches.migrate_to_multi_account
+whatsapp_evolution.patches.add_whatsapp_tick_to_contact_phone

@@ -1,0 +1,819 @@
+"""Notification."""
+
+import json
+import re
+import frappe
+from time import sleep
+
+from frappe import _dict, _
+from frappe.model.document import Document
+from frappe.utils.safe_exec import get_safe_globals, safe_exec
+from frappe.integrations.utils import make_post_request
+from frappe.desk.form.utils import get_pdf_link
+from frappe.utils import add_to_date, nowdate, datetime
+from frappe.utils.synchronization import filelock
+from frappe.utils.file_lock import LockTimeoutError
+
+from whatsapp_evolution.utils import get_whatsapp_account, format_number
+from whatsapp_evolution.whatsapp_evolution.providers import EvolutionProvider
+
+
+def _is_evolution_enabled():
+    settings = frappe.get_single("WhatsApp Settings")
+    return bool(settings.get("evolution_api_base") and settings.get_password("evolution_api_token"))
+
+
+def _extract_body_params(template_data):
+    params = []
+    components = (template_data or {}).get("components") or []
+    for component in components:
+        if component.get("type") == "body":
+            for p in component.get("parameters") or []:
+                if p.get("type") == "text":
+                    params.append(str(p.get("text") or ""))
+    return params
+
+
+def _render_template_text(template_text, params):
+    text = template_text or ""
+    for idx, value in enumerate(params, start=1):
+        text = text.replace(f"{{{{{idx}}}}}", str(value or ""))
+        text = text.replace(f"{{{{ {idx} }}}}", str(value or ""))
+    return text
+
+
+def _extract_response_message_id(response):
+    if not isinstance(response, dict):
+        return ""
+    msg_id = response.get("id") or response.get("message_id")
+    if msg_id:
+        return str(msg_id)
+    key = response.get("key") or {}
+    if isinstance(key, dict) and key.get("id"):
+        return str(key.get("id"))
+    messages = response.get("messages") or []
+    if isinstance(messages, list) and messages:
+        first = messages[0] or {}
+        if isinstance(first, dict) and first.get("id"):
+            return str(first.get("id"))
+    return ""
+
+
+def _doc_value(doc_data, key):
+    if isinstance(doc_data, dict):
+        return doc_data.get(key)
+    return getattr(doc_data, key, None)
+
+
+def _looks_like_phone(value):
+    if not value:
+        return False
+    text = str(value).strip()
+    if not text:
+        return False
+    normalized = text.replace(" ", "").replace("-", "").replace("(", "").replace(")", "")
+    if normalized.startswith("+"):
+        normalized = normalized[1:]
+    return normalized.isdigit() and len(normalized) >= 8
+
+
+def _normalize_phone(value):
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    text = re.sub(r"[^\d+]", "", text)
+    if text.startswith("+"):
+        text = text[1:]
+    return text
+
+
+def _split_candidate_numbers(value):
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple, set)):
+        raw_values = value
+    else:
+        raw_values = re.split(r"[,;\n|]+", str(value))
+
+    numbers = []
+    for raw in raw_values:
+        candidate = _normalize_phone(raw)
+        if _looks_like_phone(candidate):
+            numbers.append(candidate)
+    return numbers
+
+
+def _dedupe_numbers(numbers):
+    seen = set()
+    out = []
+    for number in numbers or []:
+        normalized = _normalize_phone(number)
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        out.append(normalized)
+    return out
+
+
+def _contact_has_whatsapp_tick():
+    meta = frappe.get_meta("Contact Phone")
+    for field in ("is_whatsapp_number", "is_whatsapp", "whatsapp"):
+        if meta.get_field(field):
+            return field
+    return None
+
+
+def _get_contact_numbers(contact_name):
+    if not contact_name or not frappe.db.exists("Contact", contact_name):
+        return []
+
+    contact = frappe.get_doc("Contact", contact_name)
+    phone_rows = contact.get("phone_nos") or []
+    tick_field = _contact_has_whatsapp_tick()
+
+    numbers = []
+    if tick_field:
+        for row in phone_rows:
+            if frappe.utils.cint(row.get(tick_field)):
+                numbers.extend(_split_candidate_numbers(row.get("phone")))
+        return _dedupe_numbers(numbers)
+
+    for row in phone_rows:
+        numbers.extend(_split_candidate_numbers(row.get("phone")))
+
+    if not numbers:
+        numbers.extend(_split_candidate_numbers(contact.get("mobile_no")))
+        numbers.extend(_split_candidate_numbers(contact.get("phone")))
+
+    return _dedupe_numbers(numbers)
+
+
+def _get_dynamic_link_contact_numbers(link_doctype, link_name):
+    if not link_doctype or not link_name:
+        return []
+
+    contact_names = frappe.get_all(
+        "Dynamic Link",
+        filters={
+            "link_doctype": link_doctype,
+            "link_name": link_name,
+            "parenttype": "Contact",
+        },
+        pluck="parent",
+    )
+    numbers = []
+    for contact_name in contact_names:
+        numbers.extend(_get_contact_numbers(contact_name))
+    return _dedupe_numbers(numbers)
+
+
+def _insert_notification_log(template, error=None, response=None):
+    meta = {"error": error} if error else {"response": response or {}}
+    frappe.get_doc(
+        {
+            "doctype": "WhatsApp Notification Log",
+            "template": template,
+            "meta_data": meta,
+        }
+    ).insert(ignore_permissions=True)
+
+
+def _was_recently_sent(reference_doctype, reference_name, to_number, template_name, seconds=90):
+    if not (reference_doctype and reference_name and to_number):
+        return False
+    rows = frappe.db.sql(
+        """
+        select name
+        from `tabWhatsApp Message`
+        where reference_doctype=%s
+          and reference_name=%s
+          and `to`=%s
+          and ifnull(template, '')=%s
+          and creation >= (now() - interval %s second)
+          and ifnull(status, '') in ('Queued', 'Started', 'Success')
+        limit 1
+        """,
+        (reference_doctype, reference_name, to_number, template_name or "", seconds),
+        as_dict=True,
+    )
+    return bool(rows)
+
+
+def _notification_dedup_key(notification_name, reference_doctype, reference_name, to_number, template_name):
+    return (
+        f"wa_notif_dedup:{notification_name}:{reference_doctype}:{reference_name}:"
+        f"{to_number}:{template_name}"
+    )
+
+
+def _acquire_notification_dedup(notification_name, reference_doctype, reference_name, to_number, template_name, ttl=180):
+    key = _notification_dedup_key(notification_name, reference_doctype, reference_name, to_number, template_name)
+    cache = frappe.cache()
+    if cache.get_value(key):
+        return False
+    cache.set_value(key, 1, expires_in_sec=ttl)
+    return True
+
+
+class WhatsAppNotification(Document):
+    """Notification."""
+
+    def validate(self):
+        """Validate."""
+        if self.notification_type == "DocType Event" and self.field_name:
+            fields = frappe.get_doc("DocType", self.reference_doctype).fields
+            fields += frappe.get_all(
+                "Custom Field",
+                filters={"dt": self.reference_doctype},
+                fields=["fieldname"]
+            )
+            if not any(field.fieldname == self.field_name for field in fields): # noqa
+                frappe.throw(_("Field name {0} does not exists").format(self.field_name))
+        if self.custom_attachment:
+            if not self.attach and not self.attach_from_field:
+                frappe.throw(_("Either {0} a file or add a {1} to send attachemt").format(
+                    frappe.bold(_("Attach")),
+                    frappe.bold(_("Attach from field")),
+                ))
+
+        if self.set_property_after_alert:
+            meta = frappe.get_meta(self.reference_doctype)
+            if not meta.get_field(self.set_property_after_alert):
+                frappe.throw(_("Field {0} not found on DocType {1}").format(
+                    self.set_property_after_alert,
+                    self.reference_doctype,
+                ))
+
+
+    def send_scheduled_message(self) -> dict:
+        """Specific to API endpoint Server Scripts."""
+        safe_exec(
+            self.condition, get_safe_globals(), dict(doc=self)
+        )
+
+        template = frappe.db.get_value(
+            "WhatsApp Templates", self.template,
+            fieldname='*'
+        )
+
+        if template and template.language_code:
+            if self.get("_contact_list"):
+                # send simple template without a doc to get field data.
+                self.send_simple_template(template)
+            elif self.get("_data_list"):
+                # allow send a dynamic template using schedule event config
+                # _doc_list shoud be [{"name": "xxx", "phone_no": "123"}]
+                for data in self._data_list:
+                    doc = frappe.get_doc(self.reference_doctype, data.get("name"))
+
+                    self.send_template_message(doc, data.get("phone_no"), template, True)
+        # return _globals.frappe.flags
+
+
+    def send_simple_template(self, template):
+        """ send simple template without a doc to get field data """
+        for contact in self._contact_list:
+            data = {
+                "messaging_product": "whatsapp",
+                "to": self.format_number(contact),
+                "type": "template",
+                "template": {
+                    "name": template.actual_name,
+                    "language": {
+                        "code": template.language_code
+                    },
+                    "components": []
+                }
+            }
+            self.content_type = template.get("header_type", "text").lower()
+            self.notify(data, template_account=template.get("whatsapp_account"))
+
+
+    def send_template_message(
+        self,
+        doc: Document,
+        phone_no=None,
+        default_template=None,
+        ignore_condition=False,
+        from_queue=False,
+    ):
+        """Specific to Document Event triggered Server Scripts."""
+        if self.disabled:
+            return
+
+        doc_data = doc.as_dict()
+        if self.condition and not ignore_condition:
+            # check if condition satisfies
+            if not frappe.safe_eval(
+                self.condition, get_safe_globals(), dict(doc=doc_data)
+            ):
+                return
+
+        delay_seconds = frappe.utils.cint(self.get("delay_seconds") or 0)
+        if delay_seconds > 0 and not from_queue:
+            frappe.enqueue(
+                "whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_notification.whatsapp_notification.send_template_message_job",
+                queue="short",
+                enqueue_after_commit=True,
+                notification_name=self.name,
+                reference_doctype=doc_data.get("doctype"),
+                reference_name=doc_data.get("name"),
+                phone_no=phone_no,
+                default_template_name=getattr(default_template, "name", None),
+                ignore_condition=ignore_condition,
+                delay_seconds=delay_seconds,
+            )
+            return
+
+        template = default_template or frappe.get_doc("WhatsApp Templates", self.template)
+
+        if template:
+            recipient_numbers = self.get_recipient_numbers(doc, doc_data, phone_no)
+            if not recipient_numbers:
+                _insert_notification_log(
+                    self.template,
+                    error=(
+                        f"No recipient number resolved for {doc_data.get('doctype')} {doc_data.get('name')}. "
+                        f"Field: {self.field_name or 'N/A'}. "
+                        "If Contact Phone has WhatsApp tick field, ensure at least one number is checked."
+                    ),
+                )
+                return
+            parameters = []
+            if self.fields:
+                for field in self.fields:
+                    if isinstance(doc, Document):
+                        value = doc.get_formatted(field.field_name)
+                    else:
+                        value = doc_data[field.field_name]
+                        if isinstance(doc_data[field.field_name], (datetime.date, datetime.datetime)):
+                            value = str(doc_data[field.field_name])
+                    parameters.append({
+                        "type": "text",
+                        "text": value
+                    })
+
+            attachment_url = ""
+            attachment_filename = ""
+            if self.attach_document_print:
+                    key = doc.get_document_share_key()  # noqa
+                    frappe.db.commit()
+                    print_format = "Standard"
+                    doctype = frappe.get_doc("DocType", doc_data["doctype"])
+                    if doctype.custom:
+                        if doctype.default_print_format:
+                            print_format = doctype.default_print_format
+                    else:
+                        default_print_format = frappe.db.get_value(
+                            "Property Setter",
+                            filters={
+                                "doc_type": doc_data["doctype"],
+                                "property": "default_print_format",
+                            },
+                            fieldname="value",
+                        )
+                        print_format = default_print_format if default_print_format else print_format
+                    link = get_pdf_link(
+                        doc_data["doctype"],
+                        doc_data["name"],
+                        print_format=print_format,
+                    )
+
+                    attachment_filename = f'{doc_data["name"]}.pdf'
+                    attachment_url = f"{frappe.utils.get_url()}{link}&key={key}"
+
+            elif self.custom_attachment:
+                    attachment_filename = self.file_name
+
+                    if self.attach_from_field:
+                        file_url = doc_data[self.attach_from_field]
+                        if not file_url.startswith("http"):
+                            # get share key so that private files can be sent
+                            key = doc.get_document_share_key()
+                            file_url = f"{frappe.utils.get_url()}{file_url}&key={key}"
+                    else:
+                        file_url = self.attach
+
+                    if file_url.startswith("http"):
+                        attachment_url = f"{file_url}"
+                    else:
+                        attachment_url = f"{frappe.utils.get_url()}{file_url}"
+
+            for phone_number in recipient_numbers:
+                formatted_to = self.format_number(phone_number)
+                lock_key = (
+                    f"wa_notif:{self.name}:{doc_data.get('doctype')}:{doc_data.get('name')}:"
+                    f"{formatted_to}:{template.name}"
+                )
+                try:
+                    with filelock(lock_key, timeout=10):
+                        if not _acquire_notification_dedup(
+                            notification_name=self.name,
+                            reference_doctype=doc_data.get("doctype"),
+                            reference_name=doc_data.get("name"),
+                            to_number=formatted_to,
+                            template_name=template.name,
+                            ttl=180,
+                        ):
+                            continue
+
+                        if _was_recently_sent(
+                            reference_doctype=doc_data.get("doctype"),
+                            reference_name=doc_data.get("name"),
+                            to_number=formatted_to,
+                            template_name=template.name,
+                            seconds=120,
+                        ):
+                            continue
+                except LockTimeoutError:
+                    continue
+
+                data = {
+                    "messaging_product": "whatsapp",
+                    "to": formatted_to,
+                    "type": "template",
+                    "template": {
+                        "name": template.actual_name,
+                        "language": {
+                            "code": template.language_code
+                        },
+                        "components": []
+                    }
+                }
+
+                if parameters:
+                    data["template"]["components"].append(
+                        {
+                            "type": "body",
+                            "parameters": parameters
+                        }
+                    )
+
+                if template.header_type == "DOCUMENT" and attachment_url:
+                    data["template"]["components"].append(
+                        {
+                            "type": "header",
+                            "parameters": [
+                                {
+                                    "type": "document",
+                                    "document": {
+                                        "link": attachment_url,
+                                        "filename": attachment_filename,
+                                    },
+                                }
+                            ],
+                        }
+                    )
+                elif template.header_type == "IMAGE" and attachment_url:
+                    data["template"]["components"].append(
+                        {
+                            "type": "header",
+                            "parameters": [
+                                {
+                                    "type": "image",
+                                    "image": {
+                                        "link": attachment_url,
+                                    },
+                                }
+                            ],
+                        }
+                    )
+                self.content_type = template.header_type.lower() if template.header_type else None
+
+                if template.buttons:
+                    button_fields = self.button_fields.split(",") if self.button_fields else []
+                    for idx, btn in enumerate(template.buttons):
+                        if btn.button_type == "Visit Website" and btn.url_type == "Dynamic":
+                            if button_fields:
+                                data["template"]["components"].append(
+                                    {
+                                        "type": "button",
+                                        "sub_type": "url",
+                                        "index": str(idx),
+                                        "parameters": [
+                                            {"type": "text", "text": doc.get(button_fields.pop(0))}
+                                        ],
+                                    }
+                                )
+
+                self.notify(data, doc_data, template_account=template.whatsapp_account)
+
+    def get_recipient_numbers(self, doc, doc_data, phone_no=None):
+        numbers = []
+        if phone_no:
+            numbers.extend(_split_candidate_numbers(phone_no))
+
+        if self.field_name:
+            value = doc_data.get(self.field_name)
+            numbers.extend(_split_candidate_numbers(value))
+            numbers.extend(_get_contact_numbers(value))
+
+        for field in ("contact_mobile", "mobile_no", "mobile", "phone", "contact_phone"):
+            numbers.extend(_split_candidate_numbers(doc_data.get(field)))
+
+        party_type = doc_data.get("party_type")
+        party = doc_data.get("party")
+        if party_type and party:
+            numbers.extend(_get_dynamic_link_contact_numbers(party_type, party))
+
+        for linked_dt_field in ("customer", "supplier", "lead", "prospect"):
+            linked_name = doc_data.get(linked_dt_field)
+            if linked_name:
+                linked_dt = linked_dt_field.title()
+                numbers.extend(_get_dynamic_link_contact_numbers(linked_dt, linked_name))
+
+        return _dedupe_numbers(numbers)
+
+    def notify(self, data, doc_data=None, template_account=None):
+        """Notify."""
+        if _is_evolution_enabled():
+            success = False
+            error_message = None
+            response = {}
+            try:
+                settings_doc = frappe.get_single("WhatsApp Settings")
+                settings = settings_doc.as_dict()
+                settings["evolution_api_token"] = settings_doc.get_password("evolution_api_token")
+                provider = EvolutionProvider(settings)
+
+                to_number = format_number(data.get("to"))
+                template_doc = frappe.get_doc("WhatsApp Templates", self.template)
+                template_text = (template_doc.get("template") or template_doc.get("template_message") or "").strip()
+                params = _extract_body_params(data.get("template"))
+                rendered_text = _render_template_text(template_text, params)
+
+                media_url = ""
+                media_type = "document"
+                media_bytes = None
+                media_name = None
+                components = (data.get("template") or {}).get("components") or []
+                for component in components:
+                    if component.get("type") != "header":
+                        continue
+                    header_params = component.get("parameters") or []
+                    if not header_params:
+                        continue
+                    hp = header_params[0]
+                    if hp.get("type") == "document":
+                        media_type = "document"
+                        media_url = ((hp.get("document") or {}).get("link") or "").strip()
+                        media_name = ((hp.get("document") or {}).get("filename") or "").strip()
+                    elif hp.get("type") == "image":
+                        media_type = "image"
+                        media_url = ((hp.get("image") or {}).get("link") or "").strip()
+
+                if self.attach_document_print and doc_data:
+                    try:
+                        ref_doctype = _doc_value(doc_data, "doctype")
+                        ref_name = _doc_value(doc_data, "name")
+                        key = frappe.get_doc(ref_doctype, ref_name).get_document_share_key()
+                        link = get_pdf_link(ref_doctype, ref_name, print_format="Standard")
+                        media_url = f"{frappe.utils.get_url()}{link}&key={key}"
+                        pdf = frappe.attach_print(
+                            ref_doctype,
+                            ref_name,
+                            print_format="Standard",
+                        )
+                        media_bytes = pdf.get("fcontent")
+                        media_name = pdf.get("fname")
+                        media_type = "document"
+                    except Exception:
+                        media_bytes = None
+                        media_name = media_name or None
+
+                if media_url or media_bytes:
+                    response = provider.send_media(
+                        to_number=to_number,
+                        media_url=media_url,
+                        media_type=media_type,
+                        caption=rendered_text,
+                        media_bytes=media_bytes,
+                        filename=media_name,
+                    )
+                    content_type = media_type
+                else:
+                    response = provider.send_message(to_number, rendered_text)
+                    content_type = "text"
+
+                new_doc = {
+                    "doctype": "WhatsApp Message",
+                    "type": "Outgoing",
+                    "message": rendered_text,
+                    "to": data.get("to"),
+                    "message_type": "Manual",
+                    "message_id": _extract_response_message_id(response) or f"evo-log-{frappe.generate_hash(length=8)}",
+                    "content_type": content_type,
+                    "use_template": 1,
+                    "template": self.template,
+                    "template_parameters": frappe.json.dumps(params, default=str) if params else None,
+                    "attach": media_url if (media_url or media_bytes) else "",
+                }
+                if doc_data:
+                    new_doc.update(
+                        {
+                            "reference_doctype": _doc_value(doc_data, "doctype"),
+                            "reference_name": _doc_value(doc_data, "name"),
+                        }
+                    )
+                msg_doc = frappe.get_doc(new_doc)
+                msg_doc.flags.skip_send = True
+                msg_doc.save(ignore_permissions=True)
+                success = True
+            except Exception as e:
+                error_message = str(e)
+            finally:
+                meta = {"error": error_message} if not success else {"response": response}
+                frappe.get_doc(
+                    {
+                        "doctype": "WhatsApp Notification Log",
+                        "template": self.template,
+                        "meta_data": meta,
+                    }
+                ).insert(ignore_permissions=True)
+            return
+
+        # Use template's whatsapp account if available, otherwise use default outgoing account
+        if template_account:
+            whatsapp_account = frappe.get_doc("WhatsApp Account", template_account)
+        else:
+            whatsapp_account = get_whatsapp_account(account_type='outgoing')
+
+        if not whatsapp_account:
+            frappe.throw(_("Please set a default outgoing WhatsApp Account"))
+
+        token = whatsapp_account.get_password("token")
+
+        headers = {
+            "authorization": f"Bearer {token}",
+            "content-type": "application/json"
+        }
+        try:
+            success = False
+            response = make_post_request(
+                f"{whatsapp_account.url}/{whatsapp_account.version}/{whatsapp_account.phone_id}/messages",
+                headers=headers, data=json.dumps(data)
+            )
+
+            if not self.get("content_type"):
+                self.content_type = 'text'
+
+            parameters = None
+            if data["template"]["components"]:
+                parameters = [param["text"] for param in data["template"]["components"][0]["parameters"]]
+                parameters = frappe.json.dumps(parameters, default=str)
+
+            new_doc = {
+                "doctype": "WhatsApp Message",
+                "type": "Outgoing",
+                "message": str(data['template']),
+                "to": data['to'],
+                "message_type": "Template",
+                "message_id": response['messages'][0]['id'],
+                "content_type": self.content_type,
+                "use_template": 1,
+                "template": self.template,
+                "template_parameters": parameters,
+                "whatsapp_account": whatsapp_account.name,
+            }
+
+            if doc_data:
+                new_doc.update({
+                    "reference_doctype": _doc_value(doc_data, "doctype"),
+                    "reference_name": _doc_value(doc_data, "name"),
+                })
+
+            frappe.get_doc(new_doc).save(ignore_permissions=True)
+
+            if doc_data and self.set_property_after_alert and self.property_value:
+                if _doc_value(doc_data, "doctype") and _doc_value(doc_data, "name"):
+                    fieldname = self.set_property_after_alert
+                    value = self.property_value
+                    meta = frappe.get_meta(_doc_value(doc_data, "doctype"))
+                    df = meta.get_field(fieldname)
+                    if df:
+                        if df.fieldtype in frappe.model.numeric_fieldtypes:
+                            value = frappe.utils.cint(value)
+
+                        frappe.db.set_value(_doc_value(doc_data, "doctype"), _doc_value(doc_data, "name"), fieldname, value)
+
+            frappe.msgprint("WhatsApp Message Triggered", indicator="green", alert=True)
+            success = True
+
+        except Exception as e:
+            error_message = str(e)
+            if frappe.flags.integration_request:
+                response = frappe.flags.integration_request.json().get('error', {})
+                if response:
+                    error_message = response.get('Error', response.get("message"))
+
+            frappe.msgprint(
+                f"Failed to trigger whatsapp message: {error_message}",
+                indicator="red",
+                alert=True
+            )
+        finally:
+            if not success:
+                meta = {"error": error_message}
+            else:
+                meta = frappe.flags.integration_request.json()
+            frappe.get_doc({
+                "doctype": "WhatsApp Notification Log",
+                "template": self.template,
+                "meta_data": meta
+            }).insert(ignore_permissions=True)
+
+
+    def on_trash(self):
+        """On delete remove from schedule."""
+        frappe.cache().delete_value("whatsapp_notification_map")
+
+
+    def format_number(self, number):
+        """Format number."""
+        if not number:
+            return number
+        if (number.startswith("+")):
+            number = number[1:len(number)]
+
+        return number
+
+    def get_documents_for_today(self):
+        """get list of documents that will be triggered today"""
+        docs = []
+
+        diff_days = self.days_in_advance
+        if self.doctype_event == "Days After":
+            diff_days = -diff_days
+
+        reference_date = add_to_date(nowdate(), days=diff_days)
+        reference_date_start = reference_date + " 00:00:00.000000"
+        reference_date_end = reference_date + " 23:59:59.000000"
+
+        doc_list = frappe.get_all(
+            self.reference_doctype,
+            fields="name",
+            filters=[
+                {self.date_changed: (">=", reference_date_start)},
+                {self.date_changed: ("<=", reference_date_end)},
+            ],
+        )
+
+        for d in doc_list:
+            doc = frappe.get_doc(self.reference_doctype, d.name)
+            self.send_template_message(doc)
+            # print(doc.name)
+
+
+@frappe.whitelist()
+def call_trigger_notifications():
+    """Trigger notifications."""
+    try:
+        # Directly call the trigger_notifications function
+        trigger_notifications()  
+    except Exception as e:
+        # Log the error but do not show any popup or alert
+        frappe.log_error(frappe.get_traceback(), "Error in call_trigger_notifications")
+        # Optionally, you could raise the exception to be handled elsewhere if needed
+        raise e
+
+def trigger_notifications(method="daily"):
+    if frappe.flags.in_import or frappe.flags.in_patch:
+        # don't send notifications while syncing or patching
+        return
+
+    if method == "daily":
+        doc_list = frappe.get_all(
+            "WhatsApp Notification", filters={"doctype_event": ("in", ("Days Before", "Days After")), "disabled": 0}
+        )
+        for d in doc_list:
+            alert = frappe.get_doc("WhatsApp Notification", d.name)
+            alert.get_documents_for_today()
+
+
+def send_template_message_job(
+    notification_name: str,
+    reference_doctype: str,
+    reference_name: str,
+    phone_no: str | None = None,
+    default_template_name: str | None = None,
+    ignore_condition: bool = False,
+    delay_seconds: int = 0,
+):
+    """Background worker for delayed WhatsApp notification sends."""
+    if delay_seconds and delay_seconds > 0:
+        sleep(delay_seconds)
+
+    notification = frappe.get_doc("WhatsApp Notification", notification_name)
+    reference_doc = frappe.get_doc(reference_doctype, reference_name)
+    default_template = (
+        frappe.get_doc("WhatsApp Templates", default_template_name)
+        if default_template_name else None
+    )
+    notification.send_template_message(
+        reference_doc,
+        phone_no=phone_no,
+        default_template=default_template,
+        ignore_condition=ignore_condition,
+        from_queue=True,
+    )
+           

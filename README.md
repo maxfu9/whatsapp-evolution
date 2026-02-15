@@ -1,5 +1,5 @@
 <div align="right">
-	<a href="https://frappecloud.com/marketplace/apps/frappe_whatsapp" target="_blank">
+	<a href="https://frappecloud.com/marketplace/apps/whatsapp_evolution" target="_blank">
 		<picture>
 			<source media="(prefers-color-scheme: dark)" srcset="https://frappe.io/files/try-on-fc-white.png">
 			<img src="https://frappe.io/files/try-on-fc-black.png" alt="Try on Frappe Cloud" height="28" />
@@ -7,9 +7,9 @@
 	</a>
 </div>
 
-# Frappe WhatsApp
+# WhatsApp Evolution
 
-[Documentation](https://shridarpatil.github.io/frappe_whatsapp/)
+[Documentation](https://shridarpatil.github.io/whatsapp_evolution/)
 
 WhatsApp integration for Frappe/ERPNext. Use Meta's WhatsApp Cloud API directly without any third-party integration.
 
@@ -39,12 +39,12 @@ WhatsApp integration for Frappe/ERPNext. Use Meta's WhatsApp Cloud API directly 
 
 ### Step 1: Get the app
 ```bash
-bench get-app https://github.com/shridarpatil/frappe_whatsapp
+bench get-app https://github.com/shridarpatil/whatsapp_evolution
 ```
 
 ### Step 2: Install on your site
 ```bash
-bench --site [sitename] install-app frappe_whatsapp
+bench --site [sitename] install-app whatsapp_evolution
 ```
 
 ## Quick Setup
@@ -187,7 +187,7 @@ doc.set("_data_list", [
 
 ### Configure Webhook on Meta
 1. Go to your Meta Developer App
-2. Set Webhook URL: `<your-domain>/api/method/frappe_whatsapp.utils.webhook.webhook`
+2. Set Webhook URL: `<your-domain>/api/method/whatsapp_evolution.utils.webhook.webhook`
 3. Add Verify Token (same as in WhatsApp Account settings)
 4. Subscribe to webhook fields:
    - `messages` - to receive incoming messages
@@ -227,13 +227,13 @@ Build automated chatbots with flows, keyword replies, and AI-powered responses.
 | | |
 |---|---|
 | **Features** | Multi-step flows, keyword matching, AI fallback (OpenAI/Anthropic/Google), session management |
-| **Install** | `bench get-app https://github.com/shridarpatil/frappe_whatsapp_chatbot` |
-| **Marketplace** | <a href="https://frappecloud.com/marketplace/apps/frappe_whatsapp_chatbot"><img src="https://frappe.io/files/try-on-fc-black.png" alt="Try on Frappe Cloud" height="28" /></a> |
+| **Install** | `bench get-app https://github.com/shridarpatil/whatsapp_evolution_chatbot` |
+| **Marketplace** | <a href="https://frappecloud.com/marketplace/apps/whatsapp_evolution_chatbot"><img src="https://frappe.io/files/try-on-fc-black.png" alt="Try on Frappe Cloud" height="28" /></a> |
 | **Use Cases** | Customer support, order status, appointment booking, lead capture |
 
 ## Documentation
 
-For detailed documentation, visit [https://shridarpatil.github.io/frappe_whatsapp/](https://shridarpatil.github.io/frappe_whatsapp/)
+For detailed documentation, visit [https://shridarpatil.github.io/whatsapp_evolution/](https://shridarpatil.github.io/whatsapp_evolution/)
 
 ## Contributing
 

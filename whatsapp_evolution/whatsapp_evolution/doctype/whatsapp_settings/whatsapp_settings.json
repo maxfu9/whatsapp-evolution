@@ -1,0 +1,78 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "creation": "2022-10-27 17:51:09.426813",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "section_break_evolution",
+  "evolution_api_base",
+  "evolution_api_token",
+  "evolution_instance",
+  "evolution_send_endpoint",
+  "attachment_delivery_mode"
+ ],
+ "fields": [
+  {
+   "fieldname": "section_break_evolution",
+   "fieldtype": "Section Break",
+   "label": "Evolution API"
+  },
+  {
+   "fieldname": "evolution_api_base",
+   "fieldtype": "Data",
+   "label": "Evolution API Base"
+  },
+  {
+   "fieldname": "evolution_api_token",
+   "fieldtype": "Password",
+   "label": "Evolution API Token"
+  },
+  {
+   "description": "Evolution instance name, e.g. erpnext",
+   "fieldname": "evolution_instance",
+   "fieldtype": "Data",
+   "label": "Evolution Instance"
+  },
+  {
+   "description": "Optional override. Example: /message/sendText/{instance}",
+   "fieldname": "evolution_send_endpoint",
+   "fieldtype": "Data",
+   "label": "Evolution Send Endpoint"
+  },
+  {
+   "default": "File Only",
+   "description": "Controls attachment behavior for the whole app. File Only never sends URL as text fallback.",
+   "fieldname": "attachment_delivery_mode",
+   "fieldtype": "Select",
+   "label": "Attachment Delivery Mode",
+   "options": "File Only\nFallback to Link"
+  }
+ ],
+ "grid_page_length": 50,
+ "index_web_pages_for_search": 1,
+ "issingle": 1,
+ "links": [],
+ "modified": "2025-12-01 13:22:14.262545",
+ "modified_by": "Administrator",
+ "module": "WhatsApp Evolution",
+ "name": "WhatsApp Settings",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "print": 1,
+   "read": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "row_format": "Dynamic",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}
