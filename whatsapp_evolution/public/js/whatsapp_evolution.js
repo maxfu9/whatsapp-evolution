@@ -173,7 +173,7 @@ function toggle_attachment_field(dialog) {
 		return;
 	}
 	const needs_media = mode === "Custom" && type !== "text";
-	const use_print = cint(dialog.get_value("attach_document_print")) === 1;
+	const use_print = Number(dialog.get_value("attach_document_print") || 0) === 1;
 	attach_field.df.reqd = needs_media && !use_print ? 1 : 0;
 	attach_field.refresh();
 }
