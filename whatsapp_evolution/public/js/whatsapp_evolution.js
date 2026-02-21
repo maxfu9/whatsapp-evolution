@@ -87,7 +87,10 @@ function open_whatsapp_dialog(frm) {
 				label: __("Attach Document Print (PDF)"),
 				fieldname: "attach_document_print",
 				fieldtype: "Check",
-				default: 0
+				default: 0,
+				change() {
+					toggle_attachment_field(dialog);
+				}
 			},
 			{
 				label: __("Print Format"),
@@ -169,7 +172,9 @@ function toggle_attachment_field(dialog) {
 	if (!attach_field) {
 		return;
 	}
-	attach_field.df.reqd = mode === "Custom" && type !== "text" ? 1 : 0;
+	const needs_media = mode === "Custom" && type !== "text";
+	const use_print = cint(dialog.get_value("attach_document_print")) === 1;
+	attach_field.df.reqd = needs_media && !use_print ? 1 : 0;
 	attach_field.refresh();
 }
 
@@ -208,6 +213,13 @@ function send_whatsapp_message(frm, dialog, values) {
 		args.attach_document_print = values.attach_document_print ? 1 : 0;
 		args.print_format = values.print_format || "";
 		args.no_letterhead = values.no_letterhead ? 1 : 0;
+
+		if (args.content_type !== "text" && !args.attach && !args.attach_document_print) {
+			frappe.msgprint(
+				__("For media custom messages, select Attachment or enable Attach Document Print (PDF).")
+			);
+			return;
+		}
 	}
 
 	frappe.call({
