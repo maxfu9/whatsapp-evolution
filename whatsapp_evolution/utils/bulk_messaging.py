@@ -17,7 +17,7 @@ def retry_failed(name):
     return True
 
 @frappe.whitelist()
-def import_recipients(list_name, doctype, mobile_field, name_field=None, filters=None, limit=None, data_fields=None):
+def import_recipients(list_name, doctype, mobile_field=None, name_field=None, filters=None, limit=None, data_fields=None):
     """Import recipients from a DocType"""
     if filters and isinstance(filters, str):
         try:

@@ -9,7 +9,6 @@
   "section_break_evolution",
   "evolution_api_base",
   "evolution_api_token",
-  "evolution_instance",
   "evolution_send_endpoint",
   "attachment_delivery_mode"
  ],
@@ -28,12 +27,6 @@
    "fieldname": "evolution_api_token",
    "fieldtype": "Password",
    "label": "Evolution API Token"
-  },
-  {
-   "description": "Evolution instance name, e.g. erpnext",
-   "fieldname": "evolution_instance",
-   "fieldtype": "Data",
-   "label": "Evolution Instance"
   },
   {
    "description": "Optional override. Example: /message/sendText/{instance}",

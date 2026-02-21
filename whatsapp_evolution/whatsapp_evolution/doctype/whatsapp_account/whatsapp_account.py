@@ -12,7 +12,9 @@ class WhatsAppAccount(Document):
 
 	def there_must_be_only_one_default(self):
 		"""If current WhatsApp Account is default, un-default all other accounts."""
-		for field in ("is_default_incoming", "is_default_outgoing"):
+		for field in ("is_default", "is_default_incoming", "is_default_outgoing"):
+			if not frappe.get_meta("WhatsApp Account").has_field(field):
+				continue
 			if not self.get(field):
 				continue
 

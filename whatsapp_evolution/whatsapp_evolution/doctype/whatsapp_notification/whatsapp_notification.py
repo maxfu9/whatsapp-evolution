@@ -14,13 +14,21 @@ from frappe.utils import add_to_date, nowdate, datetime
 from frappe.utils.synchronization import filelock
 from frappe.utils.file_lock import LockTimeoutError
 
-from whatsapp_evolution.utils import get_whatsapp_account, format_number
+from whatsapp_evolution.utils import (
+    get_whatsapp_account,
+    format_number,
+    get_evolution_settings,
+    is_evolution_enabled,
+)
 from whatsapp_evolution.whatsapp_evolution.providers import EvolutionProvider
 
 
+LEDGER_BALANCE_ALIASES = {"ledger_balance", "_ledger_balance", "ledger balance"}
+ITEMS_TEXT_ALIASES = {"custom_wa_items", "wa_items", "items_list", "invoice_items_list"}
+
+
 def _is_evolution_enabled():
-    settings = frappe.get_single("WhatsApp Settings")
-    return bool(settings.get("evolution_api_base") and settings.get_password("evolution_api_token"))
+    return is_evolution_enabled()
 
 
 def _extract_body_params(template_data):
@@ -176,6 +184,114 @@ def _insert_notification_log(template, error=None, response=None):
             "meta_data": meta,
         }
     ).insert(ignore_permissions=True)
+
+
+def _get_ledger_balance_value(doc):
+    try:
+        from erpnext.accounts.utils import get_balance_on
+    except Exception:
+        return None
+
+    account = None
+    party_type = doc.get("party_type")
+    party = doc.get("party")
+    company = doc.get("company")
+    posting_date = doc.get("posting_date") or doc.get("transaction_date") or nowdate()
+    payment_type = doc.get("payment_type")
+
+    if doc.doctype == "Payment Entry":
+        if payment_type == "Receive":
+            account = doc.get("paid_from")
+        elif payment_type == "Pay":
+            account = doc.get("paid_to")
+        else:
+            account = doc.get("paid_from") or doc.get("paid_to")
+
+    if not account:
+        for fieldname in ("account", "debit_to", "credit_to", "paid_from", "paid_to"):
+            account = doc.get(fieldname)
+            if account:
+                break
+
+    # Generic fallback for party-ledger doctypes (Customer/Supplier/etc)
+    if not account and party_type and party:
+        try:
+            from erpnext.accounts.party import get_party_account
+            account = get_party_account(party_type, party, company)
+        except Exception:
+            account = None
+
+    if not account:
+        return None
+
+    try:
+        balance = get_balance_on(
+            account=account,
+            date=posting_date,
+            party_type=party_type,
+            party=party,
+            company=company,
+        )
+    except TypeError:
+        balance = get_balance_on(account=account, date=posting_date)
+    except Exception:
+        return None
+
+    currency = doc.get("party_account_currency") or doc.get("paid_from_account_currency") or doc.get("paid_to_account_currency") or doc.get("currency")
+    try:
+        return frappe.utils.fmt_money(balance, currency=currency) if currency else frappe.utils.fmt_money(balance)
+    except Exception:
+        return str(balance)
+
+
+def _resolve_template_param_value(doc, fieldname):
+    fieldname = (fieldname or "").strip()
+    if not fieldname:
+        return ""
+
+    if fieldname.lower() in LEDGER_BALANCE_ALIASES:
+        value = _get_ledger_balance_value(doc)
+        if value is not None:
+            return value
+
+    if fieldname.lower() in ITEMS_TEXT_ALIASES:
+        value = _get_items_text_value(doc)
+        if value is not None:
+            return value
+
+    try:
+        return doc.get_formatted(fieldname)
+    except Exception:
+        value = doc.get(fieldname)
+        if value is None:
+            return ""
+        if isinstance(value, (datetime.date, datetime.datetime)):
+            return str(value)
+        return str(value)
+
+
+def _get_items_text_value(doc):
+    if doc.doctype not in ("Sales Invoice", "Purchase Invoice"):
+        return None
+
+    rows = doc.get("items") or []
+    if not rows:
+        return ""
+
+    chunks = []
+    for row in rows:
+        item_name = row.get("item_name") or row.get("item_code") or "-"
+        qty = frappe.utils.flt(row.get("qty") or 0)
+        uom = row.get("uom") or ""
+        rate = frappe.utils.flt(row.get("rate") or 0)
+        amount = frappe.utils.flt(row.get("amount") or 0)
+        chunks.append(
+            "---------------------------\n"
+            f"🔹 *نام:* {item_name}\n"
+            f"   *تعداد:* {qty:g} {uom} × *قیمت:* {frappe.utils.fmt_money(rate)} = *کل:* {frappe.utils.fmt_money(amount)}"
+        )
+    chunks.append("---------------------------")
+    return "\n".join(chunks)
 
 
 def _was_recently_sent(reference_doctype, reference_name, to_number, template_name, seconds=90):
@@ -342,12 +458,7 @@ class WhatsAppNotification(Document):
             parameters = []
             if self.fields:
                 for field in self.fields:
-                    if isinstance(doc, Document):
-                        value = doc.get_formatted(field.field_name)
-                    else:
-                        value = doc_data[field.field_name]
-                        if isinstance(doc_data[field.field_name], (datetime.date, datetime.datetime)):
-                            value = str(doc_data[field.field_name])
+                    value = _resolve_template_param_value(doc, field.field_name)
                     parameters.append({
                         "type": "text",
                         "text": value
@@ -531,9 +642,7 @@ class WhatsAppNotification(Document):
             error_message = None
             response = {}
             try:
-                settings_doc = frappe.get_single("WhatsApp Settings")
-                settings = settings_doc.as_dict()
-                settings["evolution_api_token"] = settings_doc.get_password("evolution_api_token")
+                settings = get_evolution_settings(template_account)
                 provider = EvolutionProvider(settings)
 
                 to_number = format_number(data.get("to"))

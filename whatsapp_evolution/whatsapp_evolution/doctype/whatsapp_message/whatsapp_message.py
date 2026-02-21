@@ -9,8 +9,17 @@ from frappe.model.document import Document
 from frappe.integrations.utils import make_post_request
 from frappe.desk.search import sanitize_searchfield
 
-from whatsapp_evolution.utils import get_whatsapp_account, format_number
+from whatsapp_evolution.utils import (
+    get_whatsapp_account,
+    format_number,
+    get_evolution_settings,
+    is_evolution_enabled,
+)
 from whatsapp_evolution.whatsapp_evolution.providers import EvolutionProvider
+
+
+LEDGER_BALANCE_ALIASES = {"ledger_balance", "_ledger_balance", "ledger balance"}
+ITEMS_TEXT_ALIASES = {"custom_wa_items", "wa_items", "items_list", "invoice_items_list"}
 
 
 def _get_template_text(template_doc):
@@ -39,8 +48,108 @@ def _render_template_text(template_text, params):
 
 
 def _is_evolution_enabled_global():
-    settings = frappe.get_single("WhatsApp Settings")
-    return bool(settings.get("evolution_api_base") and settings.get_password("evolution_api_token"))
+    return is_evolution_enabled()
+
+
+def _get_ledger_balance_value(doc):
+    try:
+        from erpnext.accounts.utils import get_balance_on
+    except Exception:
+        return None
+
+    account = None
+    party_type = doc.get("party_type")
+    party = doc.get("party")
+    company = doc.get("company")
+    posting_date = doc.get("posting_date") or doc.get("transaction_date") or frappe.utils.nowdate()
+    payment_type = doc.get("payment_type")
+
+    if doc.doctype == "Payment Entry":
+        if payment_type == "Receive":
+            account = doc.get("paid_from")
+        elif payment_type == "Pay":
+            account = doc.get("paid_to")
+        else:
+            account = doc.get("paid_from") or doc.get("paid_to")
+
+    if not account:
+        for fieldname in ("account", "debit_to", "credit_to", "paid_from", "paid_to"):
+            account = doc.get(fieldname)
+            if account:
+                break
+
+    # Generic fallback for party-ledger doctypes (Customer/Supplier/etc)
+    if not account and party_type and party:
+        try:
+            from erpnext.accounts.party import get_party_account
+            account = get_party_account(party_type, party, company)
+        except Exception:
+            account = None
+
+    if not account:
+        return None
+
+    try:
+        balance = get_balance_on(
+            account=account,
+            date=posting_date,
+            party_type=party_type,
+            party=party,
+            company=company,
+        )
+    except TypeError:
+        balance = get_balance_on(account=account, date=posting_date)
+    except Exception:
+        return None
+
+    currency = doc.get("party_account_currency") or doc.get("paid_from_account_currency") or doc.get("paid_to_account_currency") or doc.get("currency")
+    try:
+        return frappe.utils.fmt_money(balance, currency=currency) if currency else frappe.utils.fmt_money(balance)
+    except Exception:
+        return str(balance)
+
+
+def _resolve_template_value(ref_doc, field_name):
+    key = (field_name or "").strip()
+    if not key:
+        return ""
+    if key.lower() in LEDGER_BALANCE_ALIASES:
+        value = _get_ledger_balance_value(ref_doc)
+        if value is not None:
+            return str(value)
+    if key.lower() in ITEMS_TEXT_ALIASES:
+        value = _get_items_text_value(ref_doc)
+        if value is not None:
+            return str(value)
+    try:
+        return str(ref_doc.get_formatted(key) or "")
+    except Exception:
+        value = ref_doc.get(key)
+        return str(value or "")
+
+
+def _get_items_text_value(doc):
+    if doc.doctype not in ("Sales Invoice", "Purchase Invoice"):
+        return None
+
+    rows = doc.get("items") or []
+    if not rows:
+        return ""
+
+    chunks = []
+    for row in rows:
+        item_name = row.get("item_name") or row.get("item_code") or "-"
+        qty = frappe.utils.flt(row.get("qty") or 0)
+        uom = row.get("uom") or ""
+        rate = frappe.utils.flt(row.get("rate") or 0)
+        amount = frappe.utils.flt(row.get("amount") or 0)
+        chunks.append(
+            "---------------------------\n"
+            f"🔹 *نام:* {item_name}\n"
+            f"   *تعداد:* {qty:g} {uom} × *قیمت:* {frappe.utils.fmt_money(rate)} = *کل:* {frappe.utils.fmt_money(amount)}"
+        )
+    chunks.append("---------------------------")
+    return "\n".join(chunks)
 
 
 def _normalized_attachment_identity(attach):
@@ -178,8 +287,7 @@ class WhatsAppMessage(Document):
         return mode.lower() == "fallback to link"
 
     def is_evolution_enabled(self):
-        settings = frappe.get_single("WhatsApp Settings")
-        return bool(settings.get("evolution_api_base") and settings.get_password("evolution_api_token"))
+        return is_evolution_enabled(self.whatsapp_account)
 
     def validate(self):
         self.set_whatsapp_account()
@@ -214,7 +322,10 @@ class WhatsAppMessage(Document):
 
     def set_whatsapp_account(self):
         """Set whatsapp account to default if missing"""
-        if self.is_evolution_enabled():
+        if self.is_evolution_enabled() and not self.whatsapp_account:
+            account = get_whatsapp_account(account_type="outgoing")
+            if account:
+                self.whatsapp_account = account.name
             return
 
         if not self.whatsapp_account:
@@ -403,7 +514,7 @@ class WhatsAppMessage(Document):
             else:
                 ref_doc = frappe.get_doc(self.reference_doctype, self.reference_name)
                 for field_name in field_names:
-                    value = ref_doc.get_formatted(field_name.strip())
+                    value = _resolve_template_value(ref_doc, field_name)
                     parameters.append({"type": "text", "text": value})
                     template_parameters.append(value)
 
@@ -513,9 +624,7 @@ class WhatsAppMessage(Document):
             if not self.to:
                 frappe.throw(_("Mobile number is required."))
 
-            settings_doc = frappe.get_single("WhatsApp Settings")
-            settings = settings_doc.as_dict()
-            settings["evolution_api_token"] = settings_doc.get_password("evolution_api_token")
+            settings = get_evolution_settings(self.whatsapp_account)
             provider = EvolutionProvider(settings)
             to_number = format_number(self.to)
 
@@ -886,7 +995,7 @@ def get_template_preview(template, reference_doctype=None, reference_name=None, 
     elif reference_doctype and reference_name and template_doc.sample_values:
         field_names = template_doc.field_names.split(",") if template_doc.field_names else template_doc.sample_values.split(",")
         ref_doc = frappe.get_doc(reference_doctype, reference_name)
-        params = [str(ref_doc.get_formatted(field.strip()) or "") for field in field_names if field and field.strip()]
+        params = [_resolve_template_value(ref_doc, field) for field in field_names if field and field.strip()]
     elif reference_doctype and reference_name:
         ref_doc = frappe.get_doc(reference_doctype, reference_name)
         placeholder_matches = re.findall(r"{{\s*(\d+)\s*}}", template_text)

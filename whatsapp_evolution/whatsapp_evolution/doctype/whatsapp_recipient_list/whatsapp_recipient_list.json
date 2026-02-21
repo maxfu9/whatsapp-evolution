@@ -18,6 +18,7 @@
   "import_filters",
   "data_fields",
   "import_limit",
+  "excluded_numbers_json",
   "import_button"
  ],
  "fields": [
@@ -65,7 +66,7 @@
   },
   {
    "depends_on": "eval:doc.import_from_doctype==1",
-   "description": "Field name containing the mobile number",
+   "description": "Optional override. Leave blank to auto-detect WhatsApp/mobile numbers from the source DocType or linked Contact records.",
    "fieldname": "mobile_field",
    "fieldtype": "Data",
    "label": "Mobile Number Field"
@@ -93,7 +94,7 @@
    "label": "Import Limit"
   },
   {
-   "depends_on": "eval:doc.import_from_doctype==1 && doc.doctype_to_import && doc.mobile_field",
+   "depends_on": "eval:doc.import_from_doctype==1 && doc.doctype_to_import",
    "description": "Save form before importing",
    "fieldname": "import_button",
    "fieldtype": "Button",
@@ -106,6 +107,13 @@
    "fieldtype": "Code",
    "label": "Data fields",
    "options": "JSON"
+  },
+  {
+   "fieldname": "excluded_numbers_json",
+   "fieldtype": "Long Text",
+   "hidden": 1,
+   "label": "Excluded Numbers JSON",
+   "read_only": 1
   }
  ],
  "index_web_pages_for_search": 1,

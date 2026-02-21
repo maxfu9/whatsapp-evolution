@@ -146,11 +146,67 @@ def get_whatsapp_account(phone_id=None, account_type='incoming'):
         if default_account_name:
             return frappe.get_doc("WhatsApp Account", default_account_name)
 
+    if meta.has_field("is_default"):
+        default_account_name = frappe.db.get_value("WhatsApp Account", {"is_default": 1, "status": "Active"}, "name")
+        if default_account_name:
+            return frappe.get_doc("WhatsApp Account", default_account_name)
+
     fallback_account_name = frappe.db.get_value("WhatsApp Account", {"status": "Active"}, "name")
     if fallback_account_name:
         return frappe.get_doc("WhatsApp Account", fallback_account_name)
 
     return None
+
+
+def get_default_evolution_account():
+    """Return default active Evolution account (or first active account)."""
+    if not frappe.db.table_exists("WhatsApp Account"):
+        return None
+
+    default_name = frappe.db.get_value("WhatsApp Account", {"is_default": 1, "status": "Active"}, "name")
+    if default_name:
+        return frappe.get_doc("WhatsApp Account", default_name)
+
+    fallback_name = frappe.db.get_value("WhatsApp Account", {"status": "Active"}, "name")
+    if fallback_name:
+        return frappe.get_doc("WhatsApp Account", fallback_name)
+
+    return None
+
+
+def get_evolution_settings(whatsapp_account=None):
+    """Build effective Evolution config from account, with global fallback."""
+    settings_doc = frappe.get_single("WhatsApp Settings")
+    account_doc = None
+
+    if whatsapp_account and frappe.db.exists("WhatsApp Account", whatsapp_account):
+        account_doc = frappe.get_doc("WhatsApp Account", whatsapp_account)
+    else:
+        account_doc = get_default_evolution_account()
+
+    base = (account_doc.get("evolution_api_base") if account_doc else None) or settings_doc.get("evolution_api_base")
+    token = (
+        (account_doc.get_password("evolution_api_token", raise_exception=False) if account_doc else None)
+        or settings_doc.get_password("evolution_api_token")
+    )
+    instance = (account_doc.get("evolution_instance") if account_doc else None)
+    send_endpoint = (
+        (account_doc.get("evolution_send_endpoint") if account_doc else None)
+        or settings_doc.get("evolution_send_endpoint")
+    )
+
+    return {
+        "evolution_api_base": base,
+        "evolution_api_token": token,
+        "evolution_instance": instance,
+        "evolution_send_endpoint": send_endpoint,
+        "whatsapp_account": account_doc.name if account_doc else None,
+    }
+
+
+def is_evolution_enabled(whatsapp_account=None):
+    settings = get_evolution_settings(whatsapp_account=whatsapp_account)
+    return bool(settings.get("evolution_api_base") and settings.get("evolution_api_token"))
 
 def format_number(number):
     """Format number."""
@@ -161,3 +217,99 @@ def format_number(number):
         number = number[1 : len(number)]
 
     return number
+
+
+def cleanup_legacy_rq_jobs(needle="frappe_whatsapp"):
+    """Delete stale RQ jobs that reference removed python module paths.
+
+    This fixes rq.exceptions.DeserializationError when opening RQ Job list
+    after app renames (e.g. frappe_whatsapp -> whatsapp_evolution).
+    """
+    from frappe.utils.background_jobs import get_redis_conn
+
+    conn = get_redis_conn()
+    needle_bytes = (needle or "").encode("utf-8")
+    scanned = 0
+    deleted = 0
+    cursor = 0
+    removed_ids = []
+
+    while True:
+        cursor, keys = conn.scan(cursor=cursor, match="rq:job:*", count=500)
+        for key in keys or []:
+            scanned += 1
+            try:
+                data = conn.hget(key, "data") or b""
+            except Exception:
+                continue
+            if needle_bytes and needle_bytes not in data:
+                continue
+
+            job_id = key.decode().split("rq:job:", 1)[-1]
+            removed_ids.append(job_id)
+            conn.delete(key)
+            # Remove references from queue/registry collections.
+            conn.srem("rq:failed", job_id)
+            conn.srem("rq:finished", job_id)
+            conn.srem("rq:started", job_id)
+            conn.srem("rq:deferred", job_id)
+            conn.srem("rq:scheduled", job_id)
+            conn.zrem("rq:scheduled_jobs", job_id)
+            conn.zrem("rq:failed_jobs", job_id)
+            conn.zrem("rq:finished_jobs", job_id)
+            conn.zrem("rq:started_jobs", job_id)
+            conn.zrem("rq:deferred_jobs", job_id)
+            deleted += 1
+        if cursor == 0:
+            break
+
+    return {
+        "scanned": scanned,
+        "deleted": deleted,
+        "needle": needle,
+        "removed_job_ids": removed_ids,
+    }
+
+
+def cleanup_broken_rq_jobs():
+    """Delete RQ jobs that fail to deserialize."""
+    from rq.job import Job
+    from rq.exceptions import DeserializationError
+    from frappe.utils.background_jobs import get_redis_conn
+
+    conn = get_redis_conn()
+    cursor = 0
+    scanned = 0
+    deleted = 0
+    removed_ids = []
+
+    while True:
+        cursor, keys = conn.scan(cursor=cursor, match="rq:job:*", count=500)
+        for key in keys or []:
+            scanned += 1
+            job_id = key.decode().split("rq:job:", 1)[-1]
+            try:
+                job = Job.fetch(job_id, connection=conn)
+                # Trigger payload decode; this is where old module paths blow up.
+                _ = job.kwargs
+            except DeserializationError:
+                conn.delete(key)
+                conn.srem("rq:failed", job_id)
+                conn.srem("rq:finished", job_id)
+                conn.srem("rq:started", job_id)
+                conn.srem("rq:deferred", job_id)
+                conn.srem("rq:scheduled", job_id)
+                conn.zrem("rq:scheduled_jobs", job_id)
+                conn.zrem("rq:failed_jobs", job_id)
+                conn.zrem("rq:finished_jobs", job_id)
+                conn.zrem("rq:started_jobs", job_id)
+                conn.zrem("rq:deferred_jobs", job_id)
+                deleted += 1
+                removed_ids.append(job_id)
+            except Exception:
+                # Ignore transient/missing job errors.
+                pass
+        if cursor == 0:
+            break
+
+    return {"scanned": scanned, "deleted": deleted, "removed_job_ids": removed_ids}

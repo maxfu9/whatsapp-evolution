@@ -8,6 +8,11 @@ import time
 from frappe.utils import cint
 from frappe.model.document import Document
 from frappe.model.naming import make_autoname
+from whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_message.whatsapp_message import (
+    _is_evolution_enabled_global,
+    _parse_body_param,
+    _render_template_text,
+)
 
 # Add these files to your whatsapp_evolution app
 
@@ -20,11 +25,11 @@ class BulkWhatsAppMessage(Document):
         self.name = make_autoname("BULK-WA-.YYYY.-.#####")
     
     def validate(self):
-        # self.validate_message()
+        self.validate_message()
         self.validate_recipients()
     
     def validate_message(self):
-        if not self.message_content:
+        if not self.use_template and not (self.message_content or "").strip():
             frappe.throw(_("Message content is required"))
     
     def validate_recipients(self):
@@ -130,37 +135,41 @@ class BulkWhatsAppMessage(Document):
     
     def create_single_message(self, recipient):
         """Create a single message in the queue"""
-        # message_content = self.message_content
-        
-        # Replace variables in the message if any
         recipient_data = self._parse_recipient_data(recipient)
-        
-        # Create WhatsApp message
+
         wa_message = frappe.new_doc("WhatsApp Message")
-        # wa_message.from_number = self.from_number
         wa_message.to = recipient.get("mobile_number")
-        wa_message.message_type = "Text"
-        # wa_message.message = message_content
         wa_message.flags.custom_ref_doc = recipient_data
         wa_message.bulk_message_reference = self.name
         if self.whatsapp_account:
             wa_message.whatsapp_account = self.whatsapp_account
-        
-        # If template is being used
-        if self.use_template:
-            wa_message.template = self.template
-            wa_message.message_type = 'Template'
-            wa_message.use_template = self.use_template
-            # Handle template variables if needed
 
-            if recipient_data and self.variable_type=='Unique':
-                wa_message.body_param = json.dumps(recipient_data)
-            elif self.template_variables and self.variable_type=='Common':
-                wa_message.body_param = self.template_variables
+        # Evolution path: render template to plain text and send as Manual.
+        if self.use_template and _is_evolution_enabled_global():
+            wa_message.message_type = "Manual"
+            wa_message.content_type = "document" if self.attach else "text"
+            wa_message.message = self._render_bulk_template_text(recipient_data)
             if self.attach:
                 wa_message.attach = self.attach
-        
-        # Set status to queued
+
+        # Meta-compatible template path (legacy behavior).
+        if self.use_template:
+            wa_message.template = self.template
+            wa_message.use_template = self.use_template
+            if not _is_evolution_enabled_global():
+                wa_message.message_type = "Template"
+
+            if recipient_data and self.variable_type == "Unique":
+                wa_message.body_param = json.dumps(recipient_data)
+            elif self.template_variables and self.variable_type == "Common":
+                wa_message.body_param = self.template_variables
+            if self.attach and not _is_evolution_enabled_global():
+                wa_message.attach = self.attach
+        else:
+            wa_message.message_type = "Manual"
+            wa_message.content_type = "text"
+            wa_message.message = self.message_content or ""
+
         wa_message.status = "Queued"
         try:
             wa_message.insert(ignore_permissions=True)
@@ -178,6 +187,33 @@ class BulkWhatsAppMessage(Document):
         if cint(self.recipient_count) == cint(self.sent_count):
             self.db_set("status", "Completed")
         return True
+
+    def _render_bulk_template_text(self, recipient_data):
+        if not self.template:
+            return ""
+
+        template_doc = frappe.get_doc("WhatsApp Templates", self.template)
+        template_text = (template_doc.get("template_message") or template_doc.get("template") or "").strip()
+        if not template_text:
+            return ""
+
+        params = []
+        if self.variable_type == "Unique" and recipient_data:
+            if isinstance(recipient_data, dict):
+                digit_keys = [k for k in recipient_data.keys() if str(k).isdigit()]
+                if digit_keys:
+                    params = [
+                        str(recipient_data.get(k) or "")
+                        for k in sorted(digit_keys, key=lambda x: int(str(x)))
+                    ]
+                else:
+                    params = [str(v or "") for _, v in sorted(recipient_data.items())]
+            elif isinstance(recipient_data, list):
+                params = [str(v or "") for v in recipient_data]
+        elif self.variable_type == "Common":
+            params = _parse_body_param(self.template_variables)
+
+        return _render_template_text(template_text, params)
 
     def retry_failed(self):
         """Retry failed messages"""

@@ -216,7 +216,12 @@ doc_events = {
         "after_delete": "whatsapp_evolution.utils.run_server_script_for_doc_event",
         "before_update_after_submit": "whatsapp_evolution.utils.run_server_script_for_doc_event",
         "on_update_after_submit": "whatsapp_evolution.utils.run_server_script_for_doc_event"
-    }
+    },
+    "Sales Invoice": {
+        "validate": "whatsapp_evolution.whatsapp_evolution.sales_invoice_balance.update_sales_invoice_whatsapp_balances",
+        "on_submit": "whatsapp_evolution.whatsapp_evolution.sales_invoice_balance.update_sales_invoice_whatsapp_balances",
+        "on_update_after_submit": "whatsapp_evolution.whatsapp_evolution.sales_invoice_balance.update_sales_invoice_whatsapp_balances",
+    },
 }
 
 override_whatsapp_webhook = {

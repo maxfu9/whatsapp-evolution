@@ -1,8 +1,8 @@
 frappe.ui.form.on('WhatsApp Recipient List', {
     refresh: function(frm) {
         frm.fields_dict.import_button.onclick = function() {
-            if(!frm.doc.doctype_to_import || !frm.doc.mobile_field) {
-                frappe.throw(__('Please select a DocType and Mobile Field before importing'));
+            if(!frm.doc.doctype_to_import) {
+                frappe.throw(__('Please select a DocType before importing'));
                 return;
             }
             

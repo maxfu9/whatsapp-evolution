@@ -9,7 +9,15 @@
  "engine": "InnoDB",
  "field_order": [
   "account_name",
-  "status"
+  "status",
+  "is_default",
+  "section_break_evolution",
+  "evolution_instance",
+  "column_break_qx",
+  "evolution_send_endpoint",
+  "evolution_api_base",
+  "column_break_qy",
+  "evolution_api_token"
  ],
  "fields": [
   {
@@ -28,6 +36,51 @@
    "in_standard_filter": 1,
    "label": "Status",
    "options": "Active\nInactive"
+  },
+  {
+   "default": "0",
+   "fieldname": "is_default",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "Default Account"
+  },
+  {
+   "fieldname": "section_break_evolution",
+   "fieldtype": "Section Break",
+   "label": "Evolution API (Per Account)"
+  },
+  {
+   "description": "Required. Example: erpnext",
+   "fieldname": "evolution_instance",
+   "fieldtype": "Data",
+   "label": "Evolution Instance",
+   "reqd": 1
+  },
+  {
+   "description": "Optional override. Example: /message/sendText/{instance}",
+   "fieldname": "evolution_send_endpoint",
+   "fieldtype": "Data",
+   "label": "Evolution Send Endpoint"
+  },
+  {
+   "description": "Optional. If empty, WhatsApp Settings value is used.",
+   "fieldname": "evolution_api_base",
+   "fieldtype": "Data",
+   "label": "Evolution API Base"
+  },
+  {
+   "description": "Optional. If empty, WhatsApp Settings token is used.",
+   "fieldname": "evolution_api_token",
+   "fieldtype": "Password",
+   "label": "Evolution API Token"
+  },
+  {
+   "fieldname": "column_break_qx",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "column_break_qy",
+   "fieldtype": "Column Break"
   }
  ],
  "grid_page_length": 50,
