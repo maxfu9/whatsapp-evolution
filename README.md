@@ -33,10 +33,20 @@ Contact: hello@europlast.pk
 
 ## Installation
 
-### 1) Get app
+### 1) Get app (recommended)
+
+Use an explicit app name (underscore):
 
 ```bash
-bench get-app https://github.com/maxfu9/whatsapp-evolution
+bench get-app whatsapp_evolution https://github.com/maxfu9/whatsapp-evolution.git
+```
+
+If your Bench version does not support explicit app name for `get-app`, use manual clone:
+
+```bash
+cd ~/frappe-bench
+git clone https://github.com/maxfu9/whatsapp-evolution apps/whatsapp_evolution
+./env/bin/pip install -e apps/whatsapp_evolution
 ```
 
 ### 2) Install app on site
@@ -48,6 +58,22 @@ bench --site <your-site> install-app whatsapp_evolution
 ### 3) Migrate and rebuild
 
 ```bash
+bench --site <your-site> migrate
+bench build
+bench --site <your-site> clear-cache
+bench restart
+```
+
+## Updating App
+
+For benches affected by hyphen/underscore resolver issues, use this stable update flow:
+
+```bash
+cd ~/frappe-bench/apps/whatsapp_evolution
+git pull upstream master
+
+cd ~/frappe-bench
+./env/bin/pip install -e apps/whatsapp_evolution
 bench --site <your-site> migrate
 bench build
 bench --site <your-site> clear-cache
@@ -184,6 +210,48 @@ If assets are stale:
 bench build
 bench --site <your-site> clear-cache
 bench restart
+```
+
+### `No module named 'whatsapp-evolution'` or `.../apps/whatsapp-evolution/whatsapp-evolution/__init__.py`
+
+Your Bench app registry likely saved the hyphen key. Normalize to underscore:
+
+```bash
+cd ~/frappe-bench
+sed -i '/^whatsapp-evolution$/d' apps.txt sites/apps.txt
+grep -qx 'whatsapp_evolution' apps.txt || echo 'whatsapp_evolution' >> apps.txt
+grep -qx 'whatsapp_evolution' sites/apps.txt || echo 'whatsapp_evolution' >> sites/apps.txt
+awk 'NF && !seen[$0]++' apps.txt > /tmp/apps_clean && mv /tmp/apps_clean apps.txt
+awk 'NF && !seen[$0]++' sites/apps.txt > /tmp/sites_apps_clean && mv /tmp/sites_apps_clean sites/apps.txt
+./env/bin/pip install -e apps/whatsapp_evolution
+```
+
+### `No module named 'lark_integrationwhatsapp_evolution'`
+
+This means two app names were merged into one line in app lists. Recreate clean files:
+
+```bash
+cd ~/frappe-bench
+cat > apps.txt <<'EOF'
+frappe
+eurotheme
+frappe_desk_theme
+pdf_on_submit
+erpnext
+material_theme
+europlast_whatsapp
+go1_webshop
+print_designer
+crm
+hrms
+whatsapp_evolution
+customer_statements
+builder
+payments
+webshop
+lark_integration
+EOF
+cp apps.txt sites/apps.txt
 ```
 
 ## License
