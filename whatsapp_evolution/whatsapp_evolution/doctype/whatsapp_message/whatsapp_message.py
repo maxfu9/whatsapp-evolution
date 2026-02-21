@@ -803,7 +803,9 @@ def send_custom(
     no_letterhead=0,
     whatsapp_account=None,
 ):
-    selected_account = _resolve_outgoing_account_name(whatsapp_account)
+    # Custom messages must always use the default outgoing account.
+    # Ignore any explicit account passed from client/background kwargs.
+    selected_account = _resolve_outgoing_account_name()
     queue_name = _create_queue_placeholder(
         to=to,
         reference_doctype=reference_doctype,
@@ -872,7 +874,9 @@ def send_custom_now(
             _update_queue_status(queued_message_name, "Skipped", details="Duplicate prevented")
             return
 
-        selected_account = _resolve_outgoing_account_name(whatsapp_account)
+        # Custom messages must always use the default outgoing account.
+        # Ignore any explicit account passed from queued kwargs.
+        selected_account = _resolve_outgoing_account_name()
         doc = frappe.get_doc(
             {
                 "doctype": "WhatsApp Message",
