@@ -7,7 +7,7 @@ with open("requirements.txt") as f:
 from whatsapp_evolution import __version__ as version
 
 setup(
-    name="whatsapp-evolution",
+    name="whatsapp_evolution",
     version=version,
     description="WhatsApp integration for frappe",
     author="Europlast",
