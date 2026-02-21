@@ -968,6 +968,10 @@ def get_linked_contacts_query(doctype, txt, searchfield, start, page_len, filter
             value = ref_doc.get(field)
             if value:
                 links.add((field.title(), value))
+        party_type = ref_doc.get("party_type")
+        party = ref_doc.get("party")
+        if party_type and party:
+            links.add((party_type, party))
     except Exception:
         pass
 
