@@ -15,7 +15,4 @@ def execute():
                 frappe.delete_doc("DocType", doctype, force=True, ignore_permissions=True)
             except Exception:
                 frappe.db.sql("delete from `tabDocType` where name=%s", doctype)
-
-        frappe.db.sql("drop table if exists `tab{}`".format(doctype))
         frappe.clear_document_cache("DocType", doctype)
-
