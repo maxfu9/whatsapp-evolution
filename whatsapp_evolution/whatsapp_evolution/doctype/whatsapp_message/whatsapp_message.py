@@ -1009,3 +1009,58 @@ def get_linked_contacts_query(doctype, txt, searchfield, start, page_len, filter
         """,
         values,
     )
+
+
+@frappe.whitelist()
+def get_primary_whatsapp_number(reference_doctype, reference_name):
+    if not reference_doctype or not reference_name:
+        return {"mobile_no": ""}
+
+    if not frappe.db.exists(reference_doctype, reference_name):
+        return {"mobile_no": ""}
+
+    doc = frappe.get_doc(reference_doctype, reference_name)
+    candidates = [
+        doc.get("mobile_no"),
+        doc.get("mobile"),
+        doc.get("phone"),
+        doc.get("contact_mobile"),
+        doc.get("whatsapp_no"),
+    ]
+
+    contact_name = doc.get("contact_person")
+    if contact_name and frappe.db.exists("Contact", contact_name):
+        row = frappe.db.get_value("Contact", contact_name, ["mobile_no", "phone"], as_dict=True)
+        if row:
+            candidates.extend([row.get("mobile_no"), row.get("phone")])
+
+    party_type = doc.get("party_type")
+    party = doc.get("party")
+    if party_type and party:
+        contact_names = frappe.get_all(
+            "Dynamic Link",
+            filters={
+                "link_doctype": party_type,
+                "link_name": party,
+                "parenttype": "Contact",
+            },
+            pluck="parent",
+        )
+        if contact_names:
+            for row in frappe.get_all(
+                "Contact",
+                filters={"name": ["in", contact_names]},
+                fields=["mobile_no", "phone", "is_primary_contact"],
+                order_by="is_primary_contact desc, modified desc",
+                limit=5,
+            ):
+                candidates.extend([row.get("mobile_no"), row.get("phone")])
+
+    for number in candidates:
+        if not number:
+            continue
+        normalized = format_number(str(number).strip())
+        if normalized:
+            return {"mobile_no": normalized}
+
+    return {"mobile_no": ""}

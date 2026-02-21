@@ -328,7 +328,22 @@ function autofill_mobile_from_doc(frm, dialog) {
 
 	if (candidates.length) {
 		dialog.set_value("mobile_no", candidates[0]);
+		return;
 	}
+
+	frappe.call({
+		method: "whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_message.whatsapp_message.get_primary_whatsapp_number",
+		args: {
+			reference_doctype: frm.doc.doctype,
+			reference_name: frm.doc.name
+		},
+		callback(r) {
+			const mobile = (r.message && r.message.mobile_no) || "";
+			if (mobile) {
+				dialog.set_value("mobile_no", mobile);
+			}
+		}
+	});
 }
 
 function load_template_preview(frm, dialog) {
