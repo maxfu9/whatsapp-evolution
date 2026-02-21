@@ -61,6 +61,19 @@ def _resolve_outgoing_account_name(preferred_account=None):
     return fallback.name if fallback else None
 
 
+def _resolve_print_format(doctype, explicit_print_format=None):
+    fmt = (explicit_print_format or "").strip()
+    if fmt:
+        return fmt
+    try:
+        meta = frappe.get_meta(doctype)
+        if meta and meta.default_print_format:
+            return meta.default_print_format
+    except Exception:
+        pass
+    return "Standard"
+
+
 def _get_ledger_balance_value(doc):
     try:
         from erpnext.accounts.utils import get_balance_on
@@ -611,10 +624,16 @@ class WhatsAppMessage(Document):
                 and "download_pdf" in (self.attach or "")
             ):
                 try:
+                    requested_format = None
+                    try:
+                        parsed = parse_qs(urlparse(self.attach or "").query)
+                        requested_format = (parsed.get("format") or [None])[0]
+                    except Exception:
+                        requested_format = None
                     print_data = frappe.attach_print(
                         self.reference_doctype,
                         self.reference_name,
-                        print_format="Standard",
+                        print_format=_resolve_print_format(self.reference_doctype, requested_format),
                     )
                     media_bytes = print_data.get("fcontent")
                     media_filename = print_data.get("fname")
@@ -744,7 +763,7 @@ def send_template_now(
         send_attach = attach
         if not send_attach and frappe.utils.cint(attach_document_print):
             key = frappe.get_doc(reference_doctype, reference_name).get_document_share_key()
-            fmt = print_format or "Standard"
+            fmt = _resolve_print_format(reference_doctype, print_format)
             send_attach = (
                 f"{frappe.utils.get_url()}/api/method/frappe.utils.print_format.download_pdf"
                 f"?doctype={reference_doctype}&name={reference_name}&format={fmt}&no_letterhead={frappe.utils.cint(no_letterhead)}&key={key}"
@@ -855,7 +874,7 @@ def send_custom_now(
     try:
         if not attach and frappe.utils.cint(attach_document_print):
             key = frappe.get_doc(reference_doctype, reference_name).get_document_share_key()
-            fmt = print_format or "Standard"
+            fmt = _resolve_print_format(reference_doctype, print_format)
             attach = (
                 f"{frappe.utils.get_url()}/api/method/frappe.utils.print_format.download_pdf"
                 f"?doctype={reference_doctype}&name={reference_name}&format={fmt}&no_letterhead={frappe.utils.cint(no_letterhead)}&key={key}"

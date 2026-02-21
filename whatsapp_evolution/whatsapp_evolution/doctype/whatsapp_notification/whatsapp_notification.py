@@ -82,6 +82,19 @@ def _should_retry_on_default_account(error_message):
     )
 
 
+def _resolve_print_format(doctype, explicit_print_format=None):
+    fmt = (explicit_print_format or "").strip()
+    if fmt:
+        return fmt
+    try:
+        meta = frappe.get_meta(doctype)
+        if meta and meta.default_print_format:
+            return meta.default_print_format
+    except Exception:
+        pass
+    return "Standard"
+
+
 def _looks_like_phone(value):
     if not value:
         return False
@@ -478,21 +491,7 @@ class WhatsAppNotification(Document):
             if self.attach_document_print:
                     key = doc.get_document_share_key()  # noqa
                     frappe.db.commit()
-                    print_format = "Standard"
-                    doctype = frappe.get_doc("DocType", doc_data["doctype"])
-                    if doctype.custom:
-                        if doctype.default_print_format:
-                            print_format = doctype.default_print_format
-                    else:
-                        default_print_format = frappe.db.get_value(
-                            "Property Setter",
-                            filters={
-                                "doc_type": doc_data["doctype"],
-                                "property": "default_print_format",
-                            },
-                            fieldname="value",
-                        )
-                        print_format = default_print_format if default_print_format else print_format
+                    print_format = _resolve_print_format(doc_data["doctype"])
                     link = get_pdf_link(
                         doc_data["doctype"],
                         doc_data["name"],
@@ -695,9 +694,10 @@ class WhatsAppNotification(Document):
                     ref_doctype = _doc_value(doc_data, "doctype")
                     ref_name = _doc_value(doc_data, "name")
                     key = frappe.get_doc(ref_doctype, ref_name).get_document_share_key()
-                    link = get_pdf_link(ref_doctype, ref_name, print_format="Standard")
+                    default_print_format = _resolve_print_format(ref_doctype)
+                    link = get_pdf_link(ref_doctype, ref_name, print_format=default_print_format)
                     media_url = f"{frappe.utils.get_url()}{link}&key={key}"
-                    pdf = frappe.attach_print(ref_doctype, ref_name, print_format="Standard")
+                    pdf = frappe.attach_print(ref_doctype, ref_name, print_format=default_print_format)
                     media_bytes = pdf.get("fcontent")
                     media_name = pdf.get("fname")
                     media_type = "document"
