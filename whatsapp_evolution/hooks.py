@@ -2,9 +2,9 @@ from . import __version__ as app_version
 
 app_name = "whatsapp_evolution"
 app_title = "WhatsApp Evolution"
-app_publisher = "Shridhar Patil"
+app_publisher = "Europlast"
 app_description = "WhatsApp integration for frappe"
-app_email = "shridhar.p@zerodha.com"
+app_email = "hello@europlast.pk"
 app_license = "MIT"
 
 # Includes in <head>
@@ -221,6 +221,11 @@ doc_events = {
         "validate": "whatsapp_evolution.whatsapp_evolution.sales_invoice_balance.update_sales_invoice_whatsapp_balances",
         "on_submit": "whatsapp_evolution.whatsapp_evolution.sales_invoice_balance.update_sales_invoice_whatsapp_balances",
         "on_update_after_submit": "whatsapp_evolution.whatsapp_evolution.sales_invoice_balance.update_sales_invoice_whatsapp_balances",
+    },
+    "Payment Entry": {
+        "validate": "whatsapp_evolution.whatsapp_evolution.payment_entry_balance.update_payment_entry_whatsapp_balances",
+        "on_submit": "whatsapp_evolution.whatsapp_evolution.payment_entry_balance.update_payment_entry_whatsapp_balances",
+        "on_update_after_submit": "whatsapp_evolution.whatsapp_evolution.payment_entry_balance.update_payment_entry_whatsapp_balances",
     },
 }
 

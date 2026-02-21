@@ -223,6 +223,8 @@ class TestBulkWhatsAppMessage(IntegrationTestCase):
 
     def test_validate_with_recipient_list(self):
         """Test validation with recipient_list type."""
+        if frappe.db.exists("WhatsApp Recipient List", "Test Recipient Bulk List"):
+            frappe.delete_doc("WhatsApp Recipient List", "Test Recipient Bulk List", force=True)
         # Create a recipient list first
         rec_list = frappe.get_doc({
             "doctype": "WhatsApp Recipient List",

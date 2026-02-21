@@ -147,14 +147,8 @@ class TestWhatsAppTemplates(IntegrationTestCase):
         self.assertEqual(doc._version, "v17.0")
         self.assertEqual(doc._business_id, "tmpl_test_business_id")
 
-    @patch("whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_templates.whatsapp_templates.make_post_request")
-    def test_after_insert_creates_template_on_meta(self, mock_post):
-        """Test after_insert sends template to Meta API."""
-        mock_post.return_value = {
-            "id": "new_template_id_123",
-            "status": "PENDING",
-        }
-
+    def test_after_insert_sets_actual_name(self):
+        """Template insert should set normalized actual_name."""
         doc = frappe.get_doc({
             "doctype": "WhatsApp Templates",
             "template_name": "test_tmpl_insert",
@@ -167,19 +161,11 @@ class TestWhatsAppTemplates(IntegrationTestCase):
         })
         doc.insert(ignore_permissions=True)
 
-        self.assertTrue(mock_post.called)
-        call_args = mock_post.call_args
-        sent_data = json.loads(call_args.kwargs.get("data", call_args[1].get("data", "")))
-        self.assertEqual(sent_data["name"], "test_tmpl_insert")
-        self.assertEqual(sent_data["language"], "en")
-        self.assertEqual(sent_data["category"], "TRANSACTIONAL")
-        self.assertTrue(any(c["type"] == "BODY" for c in sent_data["components"]))
+        self.assertEqual(doc.actual_name, "test_tmpl_insert")
+        self.assertEqual(doc.language_code, "en")
 
-    @patch("whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_templates.whatsapp_templates.make_post_request")
-    def test_after_insert_with_footer(self, mock_post):
-        """Test template creation includes footer in components."""
-        mock_post.return_value = {"id": "tmpl_footer_id", "status": "PENDING"}
-
+    def test_after_insert_with_footer(self):
+        """Template footer should be saved locally."""
         doc = frappe.get_doc({
             "doctype": "WhatsApp Templates",
             "template_name": "test_tmpl_footer",
@@ -191,18 +177,10 @@ class TestWhatsAppTemplates(IntegrationTestCase):
             "whatsapp_account": "Test WA Tmpl Account",
         })
         doc.insert(ignore_permissions=True)
+        self.assertEqual(doc.footer, "Reply STOP to opt out")
 
-        call_args = mock_post.call_args
-        sent_data = json.loads(call_args.kwargs.get("data", call_args[1].get("data", "")))
-        footer_components = [c for c in sent_data["components"] if c["type"] == "FOOTER"]
-        self.assertEqual(len(footer_components), 1)
-        self.assertEqual(footer_components[0]["text"], "Reply STOP to opt out")
-
-    @patch("whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_templates.whatsapp_templates.make_post_request")
-    def test_after_insert_with_buttons(self, mock_post):
-        """Test template creation includes buttons."""
-        mock_post.return_value = {"id": "tmpl_btn_id", "status": "PENDING"}
-
+    def test_after_insert_with_buttons(self):
+        """Template buttons should be saved locally."""
         doc = frappe.get_doc({
             "doctype": "WhatsApp Templates",
             "template_name": "test_tmpl_buttons",
@@ -224,21 +202,12 @@ class TestWhatsAppTemplates(IntegrationTestCase):
         })
         doc.insert(ignore_permissions=True)
 
-        call_args = mock_post.call_args
-        sent_data = json.loads(call_args.kwargs.get("data", call_args[1].get("data", "")))
-        button_components = [c for c in sent_data["components"] if c["type"] == "BUTTONS"]
-        self.assertEqual(len(button_components), 1)
-        buttons = button_components[0]["buttons"]
-        self.assertEqual(len(buttons), 2)
-        self.assertEqual(buttons[0]["type"], "QUICK_REPLY")
-        self.assertEqual(buttons[1]["type"], "URL")
+        self.assertEqual(len(doc.buttons), 2)
+        self.assertEqual(doc.buttons[0].button_type, "Quick Reply")
+        self.assertEqual(doc.buttons[1].button_type, "Visit Website")
 
-    @patch("whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_templates.whatsapp_templates.make_post_request")
-    @patch("whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_templates.whatsapp_templates.make_request")
-    def test_on_trash_deletes_from_meta(self, mock_request, mock_post):
-        """Test on_trash calls Meta API to delete template."""
-        mock_post.return_value = {"id": "tmpl_trash_id", "status": "PENDING"}
-
+    def test_on_trash_deletes_locally(self):
+        """Template delete should work without external API dependency."""
         doc = frappe.get_doc({
             "doctype": "WhatsApp Templates",
             "template_name": "test_tmpl_trash",
@@ -249,40 +218,18 @@ class TestWhatsAppTemplates(IntegrationTestCase):
             "whatsapp_account": "Test WA Tmpl Account",
         })
         doc.insert(ignore_permissions=True)
-
-        mock_request.return_value = {}
+        name = doc.name
         doc.delete()
+        self.assertFalse(frappe.db.exists("WhatsApp Templates", name))
 
-        # Verify DELETE was called on Meta API
-        self.assertTrue(mock_request.called)
-        delete_call = mock_request.call_args
-        self.assertEqual(delete_call[0][0], "DELETE")
-        self.assertIn("message_templates", delete_call[0][1])
-
-    @patch("frappe.model.document.Document.get_password", return_value="mock_token")
-    @patch("whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_templates.whatsapp_templates.make_request")
-    @patch("whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_templates.whatsapp_templates.make_post_request")
-    def test_fetch_templates_from_meta(self, mock_post, mock_get, mock_get_password):
-        """Test the fetch whitelisted function."""
-        mock_get.return_value = {
-            "data": [
-                {
-                    "name": "test_tmpl_fetched",
-                    "status": "APPROVED",
-                    "language": "en",
-                    "category": "UTILITY",
-                    "id": "fetched_tmpl_id",
-                    "components": [
-                        {"type": "BODY", "text": "Hello {{1}}, your order is ready"},
-                        {"type": "FOOTER", "text": "Thank you"},
-                    ]
-                }
-            ]
-        }
-
+    def test_fetch_templates_from_meta(self):
+        """Meta fetch is intentionally disabled in Evolution-only mode."""
         from whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_templates.whatsapp_templates import fetch
-        result = fetch()
-        self.assertEqual(result, "Successfully fetched templates from meta")
+        self.assertRaisesRegex(
+            frappe.ValidationError,
+            "Meta sync is removed",
+            fetch,
+        )
 
     def test_upsert_doc_without_hooks(self):
         """Test upsert_doc_without_hooks inserts and updates correctly."""

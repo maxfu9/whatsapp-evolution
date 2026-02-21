@@ -26,10 +26,27 @@ def run_server_script_for_doc_event(doc, event):
         # run all scripts for this doctype + event
         for notification_name in notification:
             try:
-                frappe.get_doc(
-                    "WhatsApp Notification",
-                    notification_name
-                ).send_template_message(doc)
+                if event in ("after_insert", "on_update", "on_submit", "on_cancel", "on_update_after_submit"):
+                    delay_seconds = frappe.db.get_value(
+                        "WhatsApp Notification",
+                        notification_name,
+                        "delay_seconds",
+                    ) or 0
+                    frappe.enqueue(
+                        "whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_notification.whatsapp_notification.send_template_message_job",
+                        queue="short",
+                        enqueue_after_commit=True,
+                        notification_name=notification_name,
+                        reference_doctype=doc.doctype,
+                        reference_name=doc.name,
+                        ignore_condition=False,
+                        delay_seconds=frappe.utils.cint(delay_seconds),
+                    )
+                else:
+                    frappe.get_doc(
+                        "WhatsApp Notification",
+                        notification_name
+                    ).send_template_message(doc)
             except Exception:
                 frappe.log_error(
                     title=f"WhatsApp Notification failed: {notification_name}"
@@ -136,13 +153,21 @@ def get_whatsapp_account(phone_id=None, account_type='incoming'):
 
     if phone_id:
         if meta.has_field("phone_id"):
-            account_name = frappe.db.get_value('WhatsApp Account', {'phone_id': phone_id}, 'name')
+            account_name = frappe.db.get_value(
+                "WhatsApp Account",
+                {"phone_id": phone_id, "status": "Active"},
+                "name",
+            )
             if account_name:
                 return frappe.get_doc("WhatsApp Account", account_name)
 
-    account_field_type = 'is_default_incoming' if account_type =='incoming' else 'is_default_outgoing' 
+    account_field_type = 'is_default_incoming' if account_type == 'incoming' else 'is_default_outgoing'
     if meta.has_field(account_field_type):
-        default_account_name = frappe.db.get_value('WhatsApp Account', {account_field_type: 1}, 'name')
+        default_account_name = frappe.db.get_value(
+            "WhatsApp Account",
+            {account_field_type: 1, "status": "Active"},
+            "name",
+        )
         if default_account_name:
             return frappe.get_doc("WhatsApp Account", default_account_name)
 
@@ -162,6 +187,14 @@ def get_default_evolution_account():
     """Return default active Evolution account (or first active account)."""
     if not frappe.db.table_exists("WhatsApp Account"):
         return None
+
+    outgoing_default = frappe.db.get_value(
+        "WhatsApp Account",
+        {"is_default_outgoing": 1, "status": "Active"},
+        "name",
+    )
+    if outgoing_default:
+        return frappe.get_doc("WhatsApp Account", outgoing_default)
 
     default_name = frappe.db.get_value("WhatsApp Account", {"is_default": 1, "status": "Active"}, "name")
     if default_name:
@@ -206,7 +239,11 @@ def get_evolution_settings(whatsapp_account=None):
 
 def is_evolution_enabled(whatsapp_account=None):
     settings = get_evolution_settings(whatsapp_account=whatsapp_account)
-    return bool(settings.get("evolution_api_base") and settings.get("evolution_api_token"))
+    return bool(
+        settings.get("evolution_api_base")
+        and settings.get("evolution_api_token")
+        and settings.get("evolution_instance")
+    )
 
 def format_number(number):
     """Format number."""

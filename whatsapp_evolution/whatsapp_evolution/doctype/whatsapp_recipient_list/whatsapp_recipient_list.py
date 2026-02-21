@@ -212,8 +212,11 @@ class WhatsAppRecipientList(Document):
 		return self._dedupe_numbers(numbers)
 
 	def _auto_import_contacts_on_save(self):
-		"""Auto-fill recipients from Contact DocType when import mode is enabled."""
-		self.import_from_doctype = 1
+		"""Auto-fill recipients from Contact on save when import mode is enabled."""
+		if not frappe.utils.cint(self.import_from_doctype):
+			return
+		if self.doctype_to_import and self.doctype_to_import != "Contact":
+			return
 		self.doctype_to_import = "Contact"
 
 		filters = None

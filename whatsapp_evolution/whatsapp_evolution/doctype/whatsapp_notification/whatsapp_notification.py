@@ -8,7 +8,7 @@ from time import sleep
 from frappe import _dict, _
 from frappe.model.document import Document
 from frappe.utils.safe_exec import get_safe_globals, safe_exec
-from frappe.integrations.utils import make_post_request
+from frappe.integrations.utils import make_post_request  # Backward-compat for legacy tests that patch this symbol.
 from frappe.desk.form.utils import get_pdf_link
 from frappe.utils import add_to_date, nowdate, datetime
 from frappe.utils.synchronization import filelock
@@ -27,8 +27,8 @@ LEDGER_BALANCE_ALIASES = {"ledger_balance", "_ledger_balance", "ledger balance"}
 ITEMS_TEXT_ALIASES = {"custom_wa_items", "wa_items", "items_list", "invoice_items_list"}
 
 
-def _is_evolution_enabled():
-    return is_evolution_enabled()
+def _is_evolution_enabled(whatsapp_account=None):
+    return is_evolution_enabled(whatsapp_account=whatsapp_account)
 
 
 def _extract_body_params(template_data):
@@ -71,6 +71,15 @@ def _doc_value(doc_data, key):
     if isinstance(doc_data, dict):
         return doc_data.get(key)
     return getattr(doc_data, key, None)
+
+
+def _should_retry_on_default_account(error_message):
+    text = (error_message or "").lower()
+    return (
+        "does not exist" in text
+        or "sessionerror" in text
+        or "no sessions" in text
+    )
 
 
 def _looks_like_phone(value):
@@ -637,199 +646,144 @@ class WhatsAppNotification(Document):
 
     def notify(self, data, doc_data=None, template_account=None):
         """Notify."""
-        if _is_evolution_enabled():
-            success = False
-            error_message = None
-            response = {}
-            try:
-                settings = get_evolution_settings(template_account)
-                provider = EvolutionProvider(settings)
+        default_account = get_whatsapp_account(account_type="outgoing")
+        default_account_name = default_account.name if default_account else None
+        effective_account = template_account or default_account_name
 
-                to_number = format_number(data.get("to"))
-                template_doc = frappe.get_doc("WhatsApp Templates", self.template)
-                template_text = (template_doc.get("template") or template_doc.get("template_message") or "").strip()
-                params = _extract_body_params(data.get("template"))
-                rendered_text = _render_template_text(template_text, params)
+        if effective_account and default_account_name and effective_account != default_account_name:
+            instance = frappe.db.get_value("WhatsApp Account", effective_account, "evolution_instance")
+            if not instance or str(instance).strip().lower() == "erpnext":
+                effective_account = default_account_name
 
-                media_url = ""
-                media_type = "document"
-                media_bytes = None
-                media_name = None
-                components = (data.get("template") or {}).get("components") or []
-                for component in components:
-                    if component.get("type") != "header":
-                        continue
-                    header_params = component.get("parameters") or []
-                    if not header_params:
-                        continue
-                    hp = header_params[0]
-                    if hp.get("type") == "document":
-                        media_type = "document"
-                        media_url = ((hp.get("document") or {}).get("link") or "").strip()
-                        media_name = ((hp.get("document") or {}).get("filename") or "").strip()
-                    elif hp.get("type") == "image":
-                        media_type = "image"
-                        media_url = ((hp.get("image") or {}).get("link") or "").strip()
+        def _send_with_account(account_name):
+            if not _is_evolution_enabled(account_name):
+                frappe.throw(
+                    _("Evolution API is required. Configure Evolution on WhatsApp Account / WhatsApp Settings.")
+                )
 
-                if self.attach_document_print and doc_data:
-                    try:
-                        ref_doctype = _doc_value(doc_data, "doctype")
-                        ref_name = _doc_value(doc_data, "name")
-                        key = frappe.get_doc(ref_doctype, ref_name).get_document_share_key()
-                        link = get_pdf_link(ref_doctype, ref_name, print_format="Standard")
-                        media_url = f"{frappe.utils.get_url()}{link}&key={key}"
-                        pdf = frappe.attach_print(
-                            ref_doctype,
-                            ref_name,
-                            print_format="Standard",
-                        )
-                        media_bytes = pdf.get("fcontent")
-                        media_name = pdf.get("fname")
-                        media_type = "document"
-                    except Exception:
-                        media_bytes = None
-                        media_name = media_name or None
+            settings = get_evolution_settings(account_name)
+            provider = EvolutionProvider(settings)
 
-                if media_url or media_bytes:
-                    response = provider.send_media(
-                        to_number=to_number,
-                        media_url=media_url,
-                        media_type=media_type,
-                        caption=rendered_text,
-                        media_bytes=media_bytes,
-                        filename=media_name,
-                    )
-                    content_type = media_type
-                else:
-                    response = provider.send_message(to_number, rendered_text)
-                    content_type = "text"
+            to_number = format_number(data.get("to"))
+            template_doc = frappe.get_doc("WhatsApp Templates", self.template)
+            template_text = (template_doc.get("template") or template_doc.get("template_message") or "").strip()
+            params = _extract_body_params(data.get("template"))
+            rendered_text = _render_template_text(template_text, params)
 
-                new_doc = {
-                    "doctype": "WhatsApp Message",
-                    "type": "Outgoing",
-                    "message": rendered_text,
-                    "to": data.get("to"),
-                    "message_type": "Manual",
-                    "message_id": _extract_response_message_id(response) or f"evo-log-{frappe.generate_hash(length=8)}",
-                    "content_type": content_type,
-                    "use_template": 1,
-                    "template": self.template,
-                    "template_parameters": frappe.json.dumps(params, default=str) if params else None,
-                    "attach": media_url if (media_url or media_bytes) else "",
-                }
-                if doc_data:
-                    new_doc.update(
-                        {
-                            "reference_doctype": _doc_value(doc_data, "doctype"),
-                            "reference_name": _doc_value(doc_data, "name"),
-                        }
-                    )
-                msg_doc = frappe.get_doc(new_doc)
-                msg_doc.flags.skip_send = True
-                msg_doc.save(ignore_permissions=True)
-                success = True
-            except Exception as e:
-                error_message = str(e)
-            finally:
-                meta = {"error": error_message} if not success else {"response": response}
-                frappe.get_doc(
-                    {
-                        "doctype": "WhatsApp Notification Log",
-                        "template": self.template,
-                        "meta_data": meta,
-                    }
-                ).insert(ignore_permissions=True)
-            return
+            media_url = ""
+            media_type = "document"
+            media_bytes = None
+            media_name = None
+            components = (data.get("template") or {}).get("components") or []
+            for component in components:
+                if component.get("type") != "header":
+                    continue
+                header_params = component.get("parameters") or []
+                if not header_params:
+                    continue
+                hp = header_params[0]
+                if hp.get("type") == "document":
+                    media_type = "document"
+                    media_url = ((hp.get("document") or {}).get("link") or "").strip()
+                    media_name = ((hp.get("document") or {}).get("filename") or "").strip()
+                elif hp.get("type") == "image":
+                    media_type = "image"
+                    media_url = ((hp.get("image") or {}).get("link") or "").strip()
 
-        # Use template's whatsapp account if available, otherwise use default outgoing account
-        if template_account:
-            whatsapp_account = frappe.get_doc("WhatsApp Account", template_account)
-        else:
-            whatsapp_account = get_whatsapp_account(account_type='outgoing')
+            if self.attach_document_print and doc_data:
+                try:
+                    ref_doctype = _doc_value(doc_data, "doctype")
+                    ref_name = _doc_value(doc_data, "name")
+                    key = frappe.get_doc(ref_doctype, ref_name).get_document_share_key()
+                    link = get_pdf_link(ref_doctype, ref_name, print_format="Standard")
+                    media_url = f"{frappe.utils.get_url()}{link}&key={key}"
+                    pdf = frappe.attach_print(ref_doctype, ref_name, print_format="Standard")
+                    media_bytes = pdf.get("fcontent")
+                    media_name = pdf.get("fname")
+                    media_type = "document"
+                except Exception:
+                    media_bytes = None
+                    media_name = media_name or None
 
-        if not whatsapp_account:
-            frappe.throw(_("Please set a default outgoing WhatsApp Account"))
+            if media_url or media_bytes:
+                response = provider.send_media(
+                    to_number=to_number,
+                    media_url=media_url,
+                    media_type=media_type,
+                    caption=rendered_text,
+                    media_bytes=media_bytes,
+                    filename=media_name,
+                )
+                content_type = media_type
+            else:
+                response = provider.send_message(to_number, rendered_text)
+                content_type = "text"
 
-        token = whatsapp_account.get_password("token")
-
-        headers = {
-            "authorization": f"Bearer {token}",
-            "content-type": "application/json"
-        }
-        try:
-            success = False
-            response = make_post_request(
-                f"{whatsapp_account.url}/{whatsapp_account.version}/{whatsapp_account.phone_id}/messages",
-                headers=headers, data=json.dumps(data)
-            )
-
-            if not self.get("content_type"):
-                self.content_type = 'text'
-
-            parameters = None
-            if data["template"]["components"]:
-                parameters = [param["text"] for param in data["template"]["components"][0]["parameters"]]
-                parameters = frappe.json.dumps(parameters, default=str)
-
+            params_json = frappe.json.dumps(params, default=str) if params else None
             new_doc = {
                 "doctype": "WhatsApp Message",
                 "type": "Outgoing",
-                "message": str(data['template']),
-                "to": data['to'],
-                "message_type": "Template",
-                "message_id": response['messages'][0]['id'],
-                "content_type": self.content_type,
+                "message": rendered_text,
+                "to": data.get("to"),
+                "message_type": "Manual",
+                "message_id": _extract_response_message_id(response) or f"evo-log-{frappe.generate_hash(length=8)}",
+                "content_type": content_type,
                 "use_template": 1,
                 "template": self.template,
-                "template_parameters": parameters,
-                "whatsapp_account": whatsapp_account.name,
+                "template_parameters": params_json,
+                "attach": media_url if (media_url or media_bytes) else "",
             }
-
             if doc_data:
-                new_doc.update({
-                    "reference_doctype": _doc_value(doc_data, "doctype"),
-                    "reference_name": _doc_value(doc_data, "name"),
-                })
+                new_doc.update(
+                    {
+                        "reference_doctype": _doc_value(doc_data, "doctype"),
+                        "reference_name": _doc_value(doc_data, "name"),
+                    }
+                )
 
-            frappe.get_doc(new_doc).save(ignore_permissions=True)
+            msg_doc = frappe.get_doc(new_doc)
+            msg_doc.flags.skip_send = True
+            msg_doc.save(ignore_permissions=True)
+            return response
 
+        success = False
+        error_message = None
+        response = {}
+        try:
+            response = _send_with_account(effective_account)
             if doc_data and self.set_property_after_alert and self.property_value:
                 if _doc_value(doc_data, "doctype") and _doc_value(doc_data, "name"):
                     fieldname = self.set_property_after_alert
                     value = self.property_value
                     meta = frappe.get_meta(_doc_value(doc_data, "doctype"))
                     df = meta.get_field(fieldname)
+                    if df and df.fieldtype in frappe.model.numeric_fieldtypes:
+                        value = frappe.utils.cint(value)
                     if df:
-                        if df.fieldtype in frappe.model.numeric_fieldtypes:
-                            value = frappe.utils.cint(value)
-
                         frappe.db.set_value(_doc_value(doc_data, "doctype"), _doc_value(doc_data, "name"), fieldname, value)
-
-            frappe.msgprint("WhatsApp Message Triggered", indicator="green", alert=True)
             success = True
-
         except Exception as e:
             error_message = str(e)
-            if frappe.flags.integration_request:
-                response = frappe.flags.integration_request.json().get('error', {})
-                if response:
-                    error_message = response.get('Error', response.get("message"))
-
-            frappe.msgprint(
-                f"Failed to trigger whatsapp message: {error_message}",
-                indicator="red",
-                alert=True
-            )
+            if (
+                default_account_name
+                and effective_account != default_account_name
+                and _should_retry_on_default_account(error_message)
+            ):
+                try:
+                    response = _send_with_account(default_account_name)
+                    success = True
+                    error_message = None
+                except Exception as e2:
+                    error_message = str(e2)
         finally:
-            if not success:
-                meta = {"error": error_message}
-            else:
-                meta = frappe.flags.integration_request.json()
-            frappe.get_doc({
-                "doctype": "WhatsApp Notification Log",
-                "template": self.template,
-                "meta_data": meta
-            }).insert(ignore_permissions=True)
+            meta = {"error": error_message} if not success else {"response": response}
+            frappe.get_doc(
+                {
+                    "doctype": "WhatsApp Notification Log",
+                    "template": self.template,
+                    "meta_data": meta,
+                }
+            ).insert(ignore_permissions=True)
 
 
     def on_trash(self):

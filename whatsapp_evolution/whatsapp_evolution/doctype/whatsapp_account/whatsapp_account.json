@@ -11,6 +11,8 @@
   "account_name",
   "status",
   "is_default",
+  "is_default_incoming",
+  "is_default_outgoing",
   "section_break_evolution",
   "evolution_instance",
   "column_break_qx",
@@ -45,16 +47,78 @@
    "label": "Default Account"
   },
   {
+   "default": "0",
+   "fieldname": "is_default_incoming",
+   "fieldtype": "Check",
+   "label": "Default Incoming"
+  },
+  {
+   "default": "0",
+   "fieldname": "is_default_outgoing",
+   "fieldtype": "Check",
+   "label": "Default Outgoing"
+  },
+  {
+   "fieldname": "section_break_meta",
+   "fieldtype": "Section Break",
+   "hidden": 1,
+   "label": "Legacy (Hidden)"
+  },
+  {
+   "fieldname": "url",
+   "fieldtype": "Data",
+   "hidden": 1,
+   "label": "API URL"
+  },
+  {
+   "default": "v17.0",
+   "fieldname": "version",
+   "fieldtype": "Data",
+   "hidden": 1,
+   "label": "API Version"
+  },
+  {
+   "fieldname": "phone_id",
+   "fieldtype": "Data",
+   "hidden": 1,
+   "label": "Phone ID",
+   "unique": 1
+  },
+  {
+   "fieldname": "webhook_verify_token",
+   "fieldtype": "Data",
+   "hidden": 1,
+   "label": "Webhook Verify Token",
+   "unique": 1
+  },
+  {
+   "fieldname": "business_id",
+   "fieldtype": "Data",
+   "hidden": 1,
+   "label": "Business ID"
+  },
+  {
+   "fieldname": "app_id",
+   "fieldtype": "Data",
+   "hidden": 1,
+   "label": "App ID"
+  },
+  {
+   "fieldname": "token",
+   "fieldtype": "Password",
+   "hidden": 1,
+   "label": "Token"
+  },
+  {
    "fieldname": "section_break_evolution",
    "fieldtype": "Section Break",
    "label": "Evolution API (Per Account)"
   },
   {
-   "description": "Required. Example: erpnext",
+   "description": "Optional. Example: erpnext",
    "fieldname": "evolution_instance",
    "fieldtype": "Data",
-   "label": "Evolution Instance",
-   "reqd": 1
+   "label": "Evolution Instance"
   },
   {
    "description": "Optional override. Example: /message/sendText/{instance}",
@@ -77,6 +141,11 @@
   {
    "fieldname": "column_break_qx",
    "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "column_break_meta",
+   "fieldtype": "Column Break",
+   "hidden": 1
   },
   {
    "fieldname": "column_break_qy",

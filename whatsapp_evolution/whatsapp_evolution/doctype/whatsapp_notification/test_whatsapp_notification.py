@@ -1,7 +1,6 @@
 # Copyright (c) 2022, Shridhar Patil and Contributors
 # See license.txt
 
-import json
 from unittest.mock import patch, MagicMock
 
 import frappe
@@ -168,18 +167,12 @@ class TestWhatsAppNotification(IntegrationTestCase):
         cached = frappe.cache().get_value("whatsapp_notification_map")
         self.assertFalse(cached)
 
-    @patch("whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_notification.whatsapp_notification.make_post_request")
-    def test_send_template_message(self, mock_post):
+    @patch("whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_notification.whatsapp_notification._was_recently_sent", return_value=False)
+    @patch("whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_notification.whatsapp_notification._acquire_notification_dedup", return_value=True)
+    @patch("whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_notification.whatsapp_notification.EvolutionProvider.send_message")
+    def test_send_template_message(self, mock_send, _mock_dedup, _mock_recent):
         """Test send_template_message sends correct data."""
-        mock_post.return_value = {
-            "messages": [{"id": "wamid.notif_test_1"}],
-            "contacts": [{"wa_id": "919900112233"}]
-        }
-        # Set integration_request flag (used in finally block of notify())
-        frappe.flags.integration_request = MagicMock()
-        frappe.flags.integration_request.json.return_value = {
-            "messages": [{"id": "wamid.notif_test_1"}]
-        }
+        mock_send.return_value = {"id": "wamid.notif_test_1"}
 
         doc = self._make_notification(
             notification_name="Test Notif Send",
@@ -193,25 +186,16 @@ class TestWhatsAppNotification(IntegrationTestCase):
 
         doc.send_template_message(user)
 
-        self.assertTrue(mock_post.called)
-        call_args = mock_post.call_args
-        sent_data = json.loads(call_args.kwargs.get("data", call_args[1].get("data", "")))
-        self.assertEqual(sent_data["messaging_product"], "whatsapp")
-        self.assertEqual(sent_data["to"], "919900112233")
-        self.assertEqual(sent_data["type"], "template")
-        self.assertEqual(sent_data["template"]["name"], "test_notif_template")
+        self.assertTrue(mock_send.called)
+        self.assertEqual(mock_send.call_args.args[0], "919900112233")
+        self.assertIn("Hello", mock_send.call_args.args[1])
 
-    @patch("whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_notification.whatsapp_notification.make_post_request")
-    def test_send_template_message_without_field_name_uses_auto_resolution(self, mock_post):
+    @patch("whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_notification.whatsapp_notification._was_recently_sent", return_value=False)
+    @patch("whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_notification.whatsapp_notification._acquire_notification_dedup", return_value=True)
+    @patch("whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_notification.whatsapp_notification.EvolutionProvider.send_message")
+    def test_send_template_message_without_field_name_uses_auto_resolution(self, mock_send, _mock_dedup, _mock_recent):
         """Test auto-recipient resolution when field_name is left blank."""
-        mock_post.return_value = {
-            "messages": [{"id": "wamid.notif_auto_1"}],
-            "contacts": [{"wa_id": "919900112233"}],
-        }
-        frappe.flags.integration_request = MagicMock()
-        frappe.flags.integration_request.json.return_value = {
-            "messages": [{"id": "wamid.notif_auto_1"}]
-        }
+        mock_send.return_value = {"id": "wamid.notif_auto_1"}
 
         doc = self._make_notification(
             notification_name="Test Notif Auto Recipient",
@@ -219,25 +203,19 @@ class TestWhatsAppNotification(IntegrationTestCase):
         )
 
         user = frappe.get_doc("User", "Administrator")
-        user.mobile_no = "919900112233"
+        user.mobile_no = "919900112234"
+        user.save(ignore_permissions=True)
         doc.send_template_message(user)
 
-        self.assertTrue(mock_post.called)
-        call_args = mock_post.call_args
-        sent_data = json.loads(call_args.kwargs.get("data", call_args[1].get("data", "")))
-        self.assertEqual(sent_data["to"], "919900112233")
+        self.assertTrue(mock_send.called)
+        self.assertEqual(mock_send.call_args.args[0], "919900112234")
 
-    @patch("whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_notification.whatsapp_notification.make_post_request")
-    def test_send_template_message_with_condition(self, mock_post):
+    @patch("whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_notification.whatsapp_notification._was_recently_sent", return_value=False)
+    @patch("whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_notification.whatsapp_notification._acquire_notification_dedup", return_value=True)
+    @patch("whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_notification.whatsapp_notification.EvolutionProvider.send_message")
+    def test_send_template_message_with_condition(self, mock_send, _mock_dedup, _mock_recent):
         """Test that condition evaluation works."""
-        mock_post.return_value = {
-            "messages": [{"id": "wamid.notif_cond_1"}],
-        }
-        # Set integration_request flag (used in finally block of notify())
-        frappe.flags.integration_request = MagicMock()
-        frappe.flags.integration_request.json.return_value = {
-            "messages": [{"id": "wamid.notif_cond_1"}]
-        }
+        mock_send.return_value = {"id": "wamid.notif_cond_1"}
 
         doc = self._make_notification(
             notification_name="Test Notif Condition",
@@ -250,10 +228,10 @@ class TestWhatsAppNotification(IntegrationTestCase):
         user.mobile_no = "919900112299"
         user.enabled = 1
         doc.send_template_message(user)
-        self.assertTrue(mock_post.called)
+        self.assertTrue(mock_send.called)
 
-    @patch("whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_notification.whatsapp_notification.make_post_request")
-    def test_send_template_message_condition_not_met(self, mock_post):
+    @patch("whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_notification.whatsapp_notification.EvolutionProvider.send_message")
+    def test_send_template_message_condition_not_met(self, mock_send):
         """Test that message is not sent when condition is not met."""
         doc = self._make_notification(
             notification_name="Test Notif NoSend",
@@ -266,11 +244,11 @@ class TestWhatsAppNotification(IntegrationTestCase):
         user.enabled = 1
         doc.send_template_message(user)
 
-        self.assertFalse(mock_post.called)
+        self.assertFalse(mock_send.called)
 
     @patch("whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_notification.whatsapp_notification.frappe.enqueue")
-    @patch("whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_notification.whatsapp_notification.make_post_request")
-    def test_send_template_message_with_delay_enqueues_job(self, mock_post, mock_enqueue):
+    @patch("whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_notification.whatsapp_notification.EvolutionProvider.send_message")
+    def test_send_template_message_with_delay_enqueues_job(self, mock_send, mock_enqueue):
         """Test delayed notifications are queued and not sent inline."""
         doc = self._make_notification(
             notification_name="Test Notif Delayed",
@@ -282,7 +260,7 @@ class TestWhatsAppNotification(IntegrationTestCase):
         user.mobile_no = "919900112299"
         doc.send_template_message(user)
 
-        self.assertFalse(mock_post.called)
+        self.assertFalse(mock_send.called)
         self.assertTrue(mock_enqueue.called)
         enqueue_kwargs = mock_enqueue.call_args.kwargs
         self.assertEqual(
@@ -295,17 +273,12 @@ class TestWhatsAppNotification(IntegrationTestCase):
         self.assertEqual(enqueue_kwargs.get("delay_seconds"), 5)
 
     @patch("whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_notification.whatsapp_notification.sleep")
-    @patch("whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_notification.whatsapp_notification.make_post_request")
-    def test_send_template_message_job(self, mock_post, mock_sleep):
+    @patch("whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_notification.whatsapp_notification._was_recently_sent", return_value=False)
+    @patch("whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_notification.whatsapp_notification._acquire_notification_dedup", return_value=True)
+    @patch("whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_notification.whatsapp_notification.EvolutionProvider.send_message")
+    def test_send_template_message_job(self, mock_send, _mock_dedup, _mock_recent, mock_sleep):
         """Test background delayed worker sends notification."""
-        mock_post.return_value = {
-            "messages": [{"id": "wamid.notif_delay_1"}],
-            "contacts": [{"wa_id": "919900112233"}],
-        }
-        frappe.flags.integration_request = MagicMock()
-        frappe.flags.integration_request.json.return_value = {
-            "messages": [{"id": "wamid.notif_delay_1"}]
-        }
+        mock_send.return_value = {"id": "wamid.notif_delay_1"}
 
         doc = self._make_notification(
             notification_name="Test Notif Delayed Worker",
@@ -313,7 +286,7 @@ class TestWhatsAppNotification(IntegrationTestCase):
             delay_seconds=10,
         )
         user = frappe.get_doc("User", "Administrator")
-        user.mobile_no = "919900112233"
+        user.mobile_no = "919900112235"
         user.save(ignore_permissions=True)
 
         from whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_notification.whatsapp_notification import (
@@ -328,7 +301,7 @@ class TestWhatsAppNotification(IntegrationTestCase):
         )
 
         self.assertTrue(mock_sleep.called)
-        self.assertTrue(mock_post.called)
+        self.assertTrue(mock_send.called)
 
     def test_disabled_notification_does_not_send(self):
         """Test that disabled notification does not trigger."""

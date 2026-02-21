@@ -1,7 +1,7 @@
 [project]
 name = "whatsapp-evolution"
 authors = [
-    { name = "Shridhar Patil", email = "shrip.dev@gmail.com"}
+    { name = "Europlast", email = "hello@europlast.pk"}
 ]
 description = "WhatsApp integration for frappe. Use directly meta API's without any 3rd party integration."
 requires-python = ">=3.10"

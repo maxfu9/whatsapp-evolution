@@ -1,7 +1,6 @@
 # Copyright (c) 2022, Shridhar Patil and Contributors
 # See license.txt
 
-import json
 from unittest.mock import patch, MagicMock
 
 import frappe
@@ -84,13 +83,10 @@ class TestWhatsAppMessage(IntegrationTestCase):
         doc.insert(ignore_permissions=True)
         self.assertEqual(doc.whatsapp_account, "Test WA Msg Account")
 
-    @patch("whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_message.whatsapp_message.make_post_request")
-    def test_outgoing_text_message(self, mock_post):
+    @patch("whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_message.whatsapp_message.EvolutionProvider.send_message")
+    def test_outgoing_text_message(self, mock_send):
         """Test sending an outgoing text message."""
-        mock_post.return_value = {
-            "messages": [{"id": "wamid.test_outgoing_1"}],
-            "contacts": [{"wa_id": "919900112255"}]
-        }
+        mock_send.return_value = {"id": "wamid.test_outgoing_1"}
         doc = frappe.get_doc({
             "doctype": "WhatsApp Message",
             "type": "Outgoing",
@@ -104,21 +100,12 @@ class TestWhatsAppMessage(IntegrationTestCase):
 
         self.assertEqual(doc.message_id, "wamid.test_outgoing_1")
         self.assertEqual(doc.status, "Success")
+        mock_send.assert_called_once_with("919900112255", "Hello from test")
 
-        # Verify the API was called with correct data
-        call_args = mock_post.call_args
-        sent_data = json.loads(call_args.kwargs.get("data", call_args[1].get("data", "")))
-        self.assertEqual(sent_data["messaging_product"], "whatsapp")
-        self.assertEqual(sent_data["to"], "919900112255")
-        self.assertEqual(sent_data["type"], "text")
-        self.assertEqual(sent_data["text"]["body"], "Hello from test")
-
-    @patch("whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_message.whatsapp_message.make_post_request")
-    def test_outgoing_text_message_with_plus_number(self, mock_post):
+    @patch("whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_message.whatsapp_message.EvolutionProvider.send_message")
+    def test_outgoing_text_message_with_plus_number(self, mock_send):
         """Test that + is stripped from phone numbers."""
-        mock_post.return_value = {
-            "messages": [{"id": "wamid.test_plus_1"}],
-        }
+        mock_send.return_value = {"id": "wamid.test_plus_1"}
         doc = frappe.get_doc({
             "doctype": "WhatsApp Message",
             "type": "Outgoing",
@@ -130,16 +117,12 @@ class TestWhatsAppMessage(IntegrationTestCase):
         })
         doc.insert(ignore_permissions=True)
 
-        call_args = mock_post.call_args
-        sent_data = json.loads(call_args.kwargs.get("data", call_args[1].get("data", "")))
-        self.assertEqual(sent_data["to"], "919900112256")
+        mock_send.assert_called_once_with("919900112256", "Test plus strip")
 
-    @patch("whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_message.whatsapp_message.make_post_request")
-    def test_outgoing_reply_message(self, mock_post):
-        """Test sending a reply message includes context."""
-        mock_post.return_value = {
-            "messages": [{"id": "wamid.test_reply_1"}],
-        }
+    @patch("whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_message.whatsapp_message.EvolutionProvider.send_message")
+    def test_outgoing_reply_message(self, mock_send):
+        """Test sending a reply message."""
+        mock_send.return_value = {"id": "wamid.test_reply_1"}
         doc = frappe.get_doc({
             "doctype": "WhatsApp Message",
             "type": "Outgoing",
@@ -153,17 +136,12 @@ class TestWhatsAppMessage(IntegrationTestCase):
         })
         doc.insert(ignore_permissions=True)
 
-        call_args = mock_post.call_args
-        sent_data = json.loads(call_args.kwargs.get("data", call_args[1].get("data", "")))
-        self.assertIn("context", sent_data)
-        self.assertEqual(sent_data["context"]["message_id"], "wamid.original_msg_123")
+        mock_send.assert_called_once_with("919900112257", "Reply test")
 
-    @patch("whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_message.whatsapp_message.make_post_request")
-    def test_outgoing_image_message(self, mock_post):
+    @patch("whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_message.whatsapp_message.EvolutionProvider.send_media")
+    def test_outgoing_image_message(self, mock_send_media):
         """Test sending an image message."""
-        mock_post.return_value = {
-            "messages": [{"id": "wamid.test_image_1"}],
-        }
+        mock_send_media.return_value = {"id": "wamid.test_image_1"}
         doc = frappe.get_doc({
             "doctype": "WhatsApp Message",
             "type": "Outgoing",
@@ -176,18 +154,16 @@ class TestWhatsAppMessage(IntegrationTestCase):
         })
         doc.insert(ignore_permissions=True)
 
-        call_args = mock_post.call_args
-        sent_data = json.loads(call_args.kwargs.get("data", call_args[1].get("data", "")))
-        self.assertEqual(sent_data["type"], "image")
-        self.assertEqual(sent_data["image"]["link"], "https://example.com/image.jpg")
-        self.assertEqual(sent_data["image"]["caption"], "Image caption")
+        call_args = mock_send_media.call_args
+        self.assertEqual(call_args.kwargs["to_number"], "919900112258")
+        self.assertEqual(call_args.kwargs["media_url"], "https://example.com/image.jpg")
+        self.assertEqual(call_args.kwargs["media_type"], "image")
+        self.assertEqual(call_args.kwargs["caption"], "Image caption")
 
-    @patch("whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_message.whatsapp_message.make_post_request")
-    def test_outgoing_reaction_message(self, mock_post):
+    @patch("whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_message.whatsapp_message.EvolutionProvider.send_message")
+    def test_outgoing_reaction_message(self, mock_send):
         """Test sending a reaction message."""
-        mock_post.return_value = {
-            "messages": [{"id": "wamid.test_reaction_1"}],
-        }
+        mock_send.return_value = {"id": "wamid.test_reaction_1"}
         doc = frappe.get_doc({
             "doctype": "WhatsApp Message",
             "type": "Outgoing",
@@ -200,11 +176,7 @@ class TestWhatsAppMessage(IntegrationTestCase):
         })
         doc.insert(ignore_permissions=True)
 
-        call_args = mock_post.call_args
-        sent_data = json.loads(call_args.kwargs.get("data", call_args[1].get("data", "")))
-        self.assertEqual(sent_data["type"], "reaction")
-        self.assertEqual(sent_data["reaction"]["emoji"], "\U0001f44d")
-        self.assertEqual(sent_data["reaction"]["message_id"], "wamid.react_to_msg")
+        mock_send.assert_called_once_with("919900112259", "\U0001f44d")
 
     def test_create_whatsapp_profile_on_insert(self):
         """Test that a WhatsApp Profile is created when a message is inserted."""
@@ -256,11 +228,8 @@ class TestWhatsAppMessage(IntegrationTestCase):
         self.assertEqual(doc.format_number("+919900112233"), "919900112233")
         self.assertEqual(doc.format_number("919900112233"), "919900112233")
 
-    @patch("whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_message.whatsapp_message.make_post_request")
-    def test_send_read_receipt(self, mock_post):
-        """Test sending a read receipt."""
-        mock_post.return_value = {"success": True}
-
+    def test_send_read_receipt(self):
+        """Test read receipt is unsupported in Evolution mode."""
         doc = frappe.get_doc({
             "doctype": "WhatsApp Message",
             "type": "Incoming",
@@ -272,18 +241,13 @@ class TestWhatsAppMessage(IntegrationTestCase):
         })
         doc.insert(ignore_permissions=True)
 
-        result = doc.send_read_receipt()
-        self.assertTrue(result)
+        with self.assertRaises(frappe.ValidationError):
+            doc.send_read_receipt()
 
-        call_args = mock_post.call_args
-        sent_data = json.loads(call_args.kwargs.get("data", call_args[1].get("data", "")))
-        self.assertEqual(sent_data["status"], "read")
-        self.assertEqual(sent_data["message_id"], "wamid.test_read_receipt")
-
-    @patch("whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_message.whatsapp_message.make_post_request")
-    def test_outgoing_message_api_failure(self, mock_post):
+    @patch("whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_message.whatsapp_message.EvolutionProvider.send_message")
+    def test_outgoing_message_api_failure(self, mock_send):
         """Test that outgoing message handles API failure."""
-        mock_post.side_effect = Exception("API Error")
+        mock_send.side_effect = Exception("API Error")
         frappe.flags.integration_request = MagicMock()
         frappe.flags.integration_request.json.return_value = {
             "error": {"message": "Invalid phone number", "error_user_title": "Error"}
@@ -301,13 +265,9 @@ class TestWhatsAppMessage(IntegrationTestCase):
             })
             doc.insert(ignore_permissions=True)
 
-    @patch("whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_message.whatsapp_message.make_post_request")
-    def test_send_template_whitelisted(self, mock_post):
+    @patch("whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_message.whatsapp_message.frappe.enqueue")
+    def test_send_template_whitelisted(self, mock_enqueue):
         """Test the send_template whitelisted function."""
-        mock_post.return_value = {
-            "messages": [{"id": "wamid.test_template_wl"}],
-        }
-
         # First create a template (without hooks to avoid Meta API calls)
         if not frappe.db.exists("WhatsApp Templates", "test_msg_template-en"):
             frappe.get_doc({
@@ -332,6 +292,7 @@ class TestWhatsAppMessage(IntegrationTestCase):
             template="test_msg_template-en"
         )
 
+        self.assertTrue(mock_enqueue.called)
         self.assertTrue(
             frappe.db.exists("WhatsApp Message", {"to": "919900112263", "message_type": "Template"})
         )

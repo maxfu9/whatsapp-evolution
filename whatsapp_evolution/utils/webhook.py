@@ -27,15 +27,20 @@ def get():
 	"""Get."""
 	hub_challenge = frappe.form_dict.get("hub.challenge")
 	verify_token = frappe.form_dict.get("hub.verify_token")
-	webhook_verify_token = frappe.db.get_value(
-		'WhatsApp Account',
+	account = frappe.db.get_value(
+		"WhatsApp Account",
 		{"webhook_verify_token": verify_token},
-		'webhook_verify_token'
+		["name", "webhook_verify_token"],
+		as_dict=True,
 	)
-	if not webhook_verify_token:
+	if not account and verify_token and frappe.db.exists("WhatsApp Account", verify_token):
+		# Backward compatibility: allow account name to be used as verify token.
+		account = frappe._dict(name=verify_token, webhook_verify_token=verify_token)
+
+	if not account:
 		frappe.throw("No matching WhatsApp account")
 
-	if frappe.form_dict.get("hub.verify_token") != webhook_verify_token:
+	if frappe.form_dict.get("hub.verify_token") != account.webhook_verify_token:
 		frappe.throw("Verify token does not match")
 
 	return Response(hub_challenge, status=200)
@@ -131,48 +136,6 @@ def post():
 						"profile_name": sender_profile_name,
 						"whatsapp_account": whatsapp_account.name
 					}).insert(ignore_permissions=True)
-				# Handle WhatsApp Flows (nfm_reply)
-				elif interactive_type == 'nfm_reply':
-					nfm_reply = interactive_data['nfm_reply']
-					response_json_str = nfm_reply.get('response_json', '{}')
-
-					# Parse the response JSON
-					try:
-						flow_response = json.loads(response_json_str)
-					except json.JSONDecodeError:
-						flow_response = {}
-
-					# Create a summary message from the flow response
-					summary_parts = []
-					for key, value in flow_response.items():
-						if value:
-							summary_parts.append(f"{key}: {value}")
-					summary_message = ", ".join(summary_parts) if summary_parts else "Flow completed"
-
-					msg_doc = frappe.get_doc({
-						"doctype": "WhatsApp Message",
-						"type": "Incoming",
-						"from": message['from'],
-						"message": summary_message,
-						"message_id": message['id'],
-						"reply_to_message_id": reply_to_message_id,
-						"is_reply": is_reply,
-						"content_type": "flow",
-						"flow_response": json.dumps(flow_response),
-						"profile_name": sender_profile_name,
-						"whatsapp_account": whatsapp_account.name
-					}).insert(ignore_permissions=True)
-
-					# Publish realtime event for flow response
-					frappe.publish_realtime(
-						"whatsapp_flow_response",
-						{
-							"phone": message['from'],
-							"message_id": message['id'],
-							"flow_response": flow_response,
-							"whatsapp_account": whatsapp_account.name
-						}
-					)
 			elif message_type in ["image", "audio", "video", "document"]:
 				token = whatsapp_account.get_password("token")
 				url = f"{whatsapp_account.url}/{whatsapp_account.version}/"

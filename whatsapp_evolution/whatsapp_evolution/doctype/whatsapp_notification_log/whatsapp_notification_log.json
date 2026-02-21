@@ -18,7 +18,7 @@
   {
    "fieldname": "meta_data",
    "fieldtype": "JSON",
-   "label": "Meta Data"
+   "label": "Response Data"
   }
  ],
  "index_web_pages_for_search": 1,
