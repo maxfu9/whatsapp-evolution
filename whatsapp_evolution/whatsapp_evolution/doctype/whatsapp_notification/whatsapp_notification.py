@@ -197,6 +197,17 @@ def _get_dynamic_link_contact_numbers(link_doctype, link_name):
     return _dedupe_numbers(numbers)
 
 
+def _get_employee_cell_numbers(employee_name):
+    if not employee_name:
+        return []
+    if not frappe.db.exists("DocType", "Employee"):
+        return []
+    if not frappe.db.exists("Employee", employee_name):
+        return []
+    cell_number = frappe.db.get_value("Employee", employee_name, "cell_number")
+    return _dedupe_numbers(_split_candidate_numbers(cell_number))
+
+
 def _insert_notification_log(template, error=None, response=None):
     meta = {"error": error} if error else {"response": response or {}}
     frappe.get_doc(
@@ -634,6 +645,7 @@ class WhatsAppNotification(Document):
             value = doc_data.get(self.field_name)
             numbers.extend(_split_candidate_numbers(value))
             numbers.extend(_get_contact_numbers(value))
+            numbers.extend(_get_employee_cell_numbers(value))
 
         for field in ("contact_mobile", "mobile_no", "mobile", "phone", "contact_phone"):
             numbers.extend(_split_candidate_numbers(doc_data.get(field)))
@@ -642,12 +654,19 @@ class WhatsAppNotification(Document):
         party = doc_data.get("party")
         if party_type and party:
             numbers.extend(_get_dynamic_link_contact_numbers(party_type, party))
+            if party_type == "Employee":
+                numbers.extend(_get_employee_cell_numbers(party))
 
         for linked_dt_field in ("customer", "supplier", "lead", "prospect"):
             linked_name = doc_data.get(linked_dt_field)
             if linked_name:
                 linked_dt = linked_dt_field.title()
                 numbers.extend(_get_dynamic_link_contact_numbers(linked_dt, linked_name))
+
+        for employee_field in ("employee", "employee_name"):
+            employee_name = doc_data.get(employee_field)
+            if employee_name:
+                numbers.extend(_get_employee_cell_numbers(employee_name))
 
         return _dedupe_numbers(numbers)
 

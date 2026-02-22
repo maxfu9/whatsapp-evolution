@@ -1071,6 +1071,15 @@ def get_primary_whatsapp_number(reference_doctype, reference_name):
                     ]
                 )
 
+    employee_name = doc.get("employee") or doc.get("employee_name")
+    if employee_name and frappe.db.exists("DocType", "Employee") and frappe.db.exists("Employee", employee_name):
+        cell_number = frappe.db.get_value("Employee", employee_name, "cell_number")
+        candidates.append((cell_number, None))
+
+    if party_type == "Employee" and party and frappe.db.exists("DocType", "Employee") and frappe.db.exists("Employee", party):
+        party_cell_number = frappe.db.get_value("Employee", party, "cell_number")
+        candidates.append((party_cell_number, None))
+
     for number, selected_contact in candidates:
         if not number:
             continue

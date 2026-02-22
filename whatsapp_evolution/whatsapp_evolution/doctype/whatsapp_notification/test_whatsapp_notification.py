@@ -250,6 +250,22 @@ class TestWhatsAppNotification(IntegrationTestCase):
 
         self.assertTrue(mock_send.called)
 
+    @patch("whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_notification.whatsapp_notification._get_employee_cell_numbers")
+    def test_get_recipient_numbers_includes_employee_cell_number(self, mock_get_employee_cell_numbers):
+        """Test employee cell_number is included in recipient resolution."""
+        mock_get_employee_cell_numbers.return_value = ["923001112233"]
+
+        notif = self._make_notification(
+            notification_name="Test Notif Employee Number",
+            field_name="",
+        )
+        user = frappe.get_doc("User", "Administrator")
+        doc_data = user.as_dict()
+        doc_data["employee"] = "EMP-0001"
+
+        recipients = notif.get_recipient_numbers(user, doc_data)
+        self.assertIn("923001112233", recipients)
+
     @patch("whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_notification.whatsapp_notification._was_recently_sent", return_value=False)
     @patch("whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_notification.whatsapp_notification._acquire_notification_dedup", return_value=True)
     @patch("whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_notification.whatsapp_notification.EvolutionProvider.send_message")
