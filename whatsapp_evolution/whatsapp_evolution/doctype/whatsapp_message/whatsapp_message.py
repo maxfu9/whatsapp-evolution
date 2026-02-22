@@ -668,10 +668,7 @@ class WhatsAppMessage(Document):
 
     def format_number(self, number):
         """Format number."""
-        if number.startswith("+"):
-            number = number[1 : len(number)]
-
-        return number
+        return format_number(number)
 
     @frappe.whitelist()
     def send_read_receipt(self):

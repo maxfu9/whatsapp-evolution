@@ -820,12 +820,7 @@ class WhatsAppNotification(Document):
 
     def format_number(self, number):
         """Format number."""
-        if not number:
-            return number
-        if (number.startswith("+")):
-            number = number[1:len(number)]
-
-        return number
+        return format_number(number)
 
     def get_documents_for_today(self):
         """get list of documents that will be triggered today"""

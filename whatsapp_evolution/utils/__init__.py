@@ -250,11 +250,26 @@ def format_number(number):
     """Format number."""
     if not number:
         return number
+    text = str(number).strip()
+    if not text:
+        return ""
 
-    if number.startswith("+"):
-        number = number[1 : len(number)]
+    # Keep only dialable chars, then normalize leading markers.
+    text = "".join(ch for ch in text if ch.isdigit() or ch == "+")
+    if text.startswith("+"):
+        text = text[1:]
+    if text.startswith("0092"):
+        text = "92" + text[4:]
 
-    return number
+    # Pakistan local mobile to international.
+    if len(text) == 11 and text.startswith("03"):
+        return "92" + text[1:]
+
+    # Already in international PK format.
+    if text.startswith("92"):
+        return text
+
+    return text
 
 
 def cleanup_legacy_rq_jobs(needle="frappe_whatsapp"):

@@ -27,6 +27,15 @@ class TestFormatNumber(IntegrationTestCase):
     def test_plus_only_at_start(self):
         self.assertEqual(format_number("+1234567890"), "1234567890")
 
+    def test_pk_local_mobile_converted_to_92(self):
+        self.assertEqual(format_number("03001234567"), "923001234567")
+
+    def test_pk_plus_92_keeps_92_without_plus(self):
+        self.assertEqual(format_number("+923001234567"), "923001234567")
+
+    def test_pk_92_kept_as_is(self):
+        self.assertEqual(format_number("923001234567"), "923001234567")
+
 
 class TestGetWhatsAppAccount(IntegrationTestCase):
     """Tests for get_whatsapp_account utility."""
