@@ -339,6 +339,10 @@ function autofill_mobile_from_doc(frm, dialog) {
 		},
 		callback(r) {
 			const mobile = (r.message && r.message.mobile_no) || "";
+			const contact = (r.message && r.message.contact) || "";
+			if (contact) {
+				dialog.set_value("contact", contact);
+			}
 			if (mobile) {
 				dialog.set_value("mobile_no", mobile);
 			}

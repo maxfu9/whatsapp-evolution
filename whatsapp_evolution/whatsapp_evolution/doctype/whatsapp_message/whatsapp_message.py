@@ -1025,18 +1025,23 @@ def get_primary_whatsapp_number(reference_doctype, reference_name):
 
     doc = frappe.get_doc(reference_doctype, reference_name)
     candidates = [
-        doc.get("mobile_no"),
-        doc.get("mobile"),
-        doc.get("phone"),
-        doc.get("contact_mobile"),
-        doc.get("whatsapp_no"),
+        (doc.get("mobile_no"), None),
+        (doc.get("mobile"), None),
+        (doc.get("phone"), None),
+        (doc.get("contact_mobile"), None),
+        (doc.get("whatsapp_no"), None),
     ]
 
     contact_name = doc.get("contact_person")
     if contact_name and frappe.db.exists("Contact", contact_name):
         row = frappe.db.get_value("Contact", contact_name, ["mobile_no", "phone"], as_dict=True)
         if row:
-            candidates.extend([row.get("mobile_no"), row.get("phone")])
+            candidates.extend(
+                [
+                    (row.get("mobile_no"), contact_name),
+                    (row.get("phone"), contact_name),
+                ]
+            )
 
     party_type = doc.get("party_type")
     party = doc.get("party")
@@ -1054,17 +1059,23 @@ def get_primary_whatsapp_number(reference_doctype, reference_name):
             for row in frappe.get_all(
                 "Contact",
                 filters={"name": ["in", contact_names]},
-                fields=["mobile_no", "phone", "is_primary_contact"],
+                fields=["name", "mobile_no", "phone", "is_primary_contact"],
                 order_by="is_primary_contact desc, modified desc",
                 limit=5,
             ):
-                candidates.extend([row.get("mobile_no"), row.get("phone")])
+                contact_ref = row.get("name")
+                candidates.extend(
+                    [
+                        (row.get("mobile_no"), contact_ref),
+                        (row.get("phone"), contact_ref),
+                    ]
+                )
 
-    for number in candidates:
+    for number, selected_contact in candidates:
         if not number:
             continue
         normalized = format_number(str(number).strip())
         if normalized:
-            return {"mobile_no": normalized}
+            return {"mobile_no": normalized, "contact": selected_contact or ""}
 
-    return {"mobile_no": ""}
+    return {"mobile_no": "", "contact": ""}
