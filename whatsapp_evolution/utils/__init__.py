@@ -18,9 +18,10 @@ def run_server_script_for_doc_event(doc, event):
     if frappe.flags.in_uninstall:
         return
 
-    notification = get_notifications_map().get(
-        doc.doctype, {}
-    ).get(EVENT_MAP[event], None)
+    doctype_notifications = get_notifications_map().get(doc.doctype, {})
+    mapped_event = EVENT_MAP[event]
+    # Backward compatibility: older rows may store raw event keys.
+    notification = doctype_notifications.get(mapped_event) or doctype_notifications.get(event)
 
     if notification:
         # run all scripts for this doctype + event

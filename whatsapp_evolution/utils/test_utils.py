@@ -188,6 +188,22 @@ class TestRunServerScriptForDocEvent(IntegrationTestCase):
         # 'random_event' is not in EVENT_MAP, should just return
         run_server_script_for_doc_event(doc, "random_event")
 
+    @patch("whatsapp_evolution.utils.frappe.db.get_value", return_value=0)
+    @patch("whatsapp_evolution.utils.frappe.enqueue")
+    @patch("whatsapp_evolution.utils.get_notifications_map")
+    def test_supports_raw_event_keys(self, mock_map, mock_enqueue, _mock_delay):
+        """Test backward compatibility when map stores raw event keys."""
+        mock_map.return_value = {
+            "User": {
+                "on_submit": ["Test Notif Raw Key"],
+            }
+        }
+
+        doc = frappe.get_doc("User", "Administrator")
+        run_server_script_for_doc_event(doc, "on_submit")
+
+        self.assertTrue(mock_enqueue.called)
+
 
 class TestTriggerWhatsAppNotifications(IntegrationTestCase):
     """Tests for trigger_whatsapp_notifications."""

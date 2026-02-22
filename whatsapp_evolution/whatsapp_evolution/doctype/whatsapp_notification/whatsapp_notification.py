@@ -382,6 +382,14 @@ class WhatsAppNotification(Document):
                     self.reference_doctype,
                 ))
 
+    def after_insert(self):
+        """Refresh cached notification map after create."""
+        frappe.cache().delete_value("whatsapp_notification_map")
+
+    def on_update(self):
+        """Refresh cached notification map after update."""
+        frappe.cache().delete_value("whatsapp_notification_map")
+
 
     def send_scheduled_message(self) -> dict:
         """Specific to API endpoint Server Scripts."""
@@ -861,8 +869,12 @@ def send_template_message_job(
     default_template_name: str | None = None,
     ignore_condition: bool = False,
     delay_seconds: int = 0,
+    **kwargs,
 ):
     """Background worker for delayed WhatsApp notification sends."""
+    # Ignore extra enqueue metadata keys (e.g. track_job) for compatibility.
+    _ = kwargs
+
     if delay_seconds and delay_seconds > 0:
         sleep(delay_seconds)
 
