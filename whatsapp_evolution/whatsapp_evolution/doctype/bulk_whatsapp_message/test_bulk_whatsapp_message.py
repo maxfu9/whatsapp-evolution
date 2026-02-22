@@ -125,6 +125,16 @@ class TestBulkWhatsAppMessage(IntegrationTestCase):
         doc = self._make_bulk_message(title="Test Bulk Count")
         self.assertEqual(doc.recipient_count, 2)
 
+    def test_validate_normalizes_recipient_numbers(self):
+        """Bulk recipient numbers are normalized on save."""
+        doc = self._make_bulk_message(
+            title="Test Bulk Normalize",
+            recipients=[
+                {"mobile_number": "03001234567", "recipient_name": "User 1"},
+            ],
+        )
+        self.assertEqual(doc.recipients[0].mobile_number, "923001234567")
+
     @patch("whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_message.whatsapp_message.make_post_request")
     def test_on_submit_queues_messages(self, mock_post):
         """Test that submitting queues the messages."""

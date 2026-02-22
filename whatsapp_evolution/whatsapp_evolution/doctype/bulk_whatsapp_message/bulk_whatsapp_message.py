@@ -13,6 +13,7 @@ from whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_message.whatsapp_mes
     _parse_body_param,
     _render_template_text,
 )
+from whatsapp_evolution.utils import format_number
 
 # Add these files to your whatsapp_evolution app
 
@@ -35,6 +36,10 @@ class BulkWhatsAppMessage(Document):
     def validate_recipients(self):
         if not self.recipients and not self.recipient_list:
             frappe.throw(_("At least one recipient or a recipient list is required"))
+
+        if self.recipients:
+            for row in self.recipients:
+                row.mobile_number = format_number(row.mobile_number)
         
         # If recipient list is provided, count recipients
         if self.recipient_type == 'Recipient List' and self.recipient_list:

@@ -144,5 +144,18 @@ class TestWhatsAppRecipientList(IntegrationTestCase):
         # Manual mobile number isn't auto-formatted (that's in import logic)
         # Test the import logic separately by checking the function
         mobile = "+91-9900-112233"
-        formatted = ''.join(char for char in mobile if char.isdigit() or char == '+')
-        self.assertEqual(formatted, "+919900112233")
+        formatted = doc._normalize_mobile(mobile)
+        self.assertEqual(formatted, "919900112233")
+
+    def test_manual_recipient_number_is_normalized_on_save(self):
+        """Manual list numbers are normalized and deduplicated on save."""
+        doc = self._make_recipient_list(
+            list_name="Test Recipient Normalize",
+            recipients=[
+                {"mobile_number": "03001234567", "recipient_name": "User 1"},
+                {"mobile_number": "+923001234567", "recipient_name": "User 1 Dup"},
+            ],
+        )
+
+        self.assertEqual(len(doc.recipients), 1)
+        self.assertEqual(doc.recipients[0].mobile_number, "923001234567")

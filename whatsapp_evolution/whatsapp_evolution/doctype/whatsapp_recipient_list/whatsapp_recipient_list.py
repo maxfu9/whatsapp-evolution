@@ -2,6 +2,7 @@ import frappe
 import json
 from frappe import _
 from frappe.model.document import Document
+from whatsapp_evolution.utils import format_number
 
 
 class WhatsAppRecipientList(Document):
@@ -17,7 +18,9 @@ class WhatsAppRecipientList(Document):
 	PARTY_LINK_OPTIONS = {"Customer", "Supplier", "Lead", "Prospect"}
 
 	def validate(self):
+		self._normalize_current_recipients()
 		self._auto_import_contacts_on_save()
+		self._normalize_current_recipients()
 		self.validate_recipients()
 	
 	def validate_recipients(self):
@@ -30,7 +33,35 @@ class WhatsAppRecipientList(Document):
 		if not isinstance(mobile, str):
 			mobile = str(mobile)
 		mobile = "".join(char for char in mobile if char.isdigit() or char == "+")
-		return mobile.strip()
+		mobile = mobile.strip()
+		return format_number(mobile)
+
+	def _normalize_current_recipients(self):
+		"""Normalize and deduplicate manually entered recipient numbers."""
+		if not self.get("recipients"):
+			return
+
+		seen = set()
+		cleaned_rows = []
+		for row in self.get("recipients") or []:
+			mobile = self._normalize_mobile(row.get("mobile_number"))
+			if not mobile:
+				continue
+			key = self._normalize_key(mobile)
+			if key in seen:
+				continue
+			seen.add(key)
+			cleaned_rows.append(
+				{
+					"mobile_number": mobile,
+					"recipient_name": row.get("recipient_name"),
+					"recipient_data": row.get("recipient_data"),
+				}
+			)
+
+		self.set("recipients", [])
+		for row in cleaned_rows:
+			self.append("recipients", row)
 
 	def _split_mobile_candidates(self, value):
 		if value is None:
