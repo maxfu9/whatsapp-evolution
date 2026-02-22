@@ -87,6 +87,20 @@ class EvolutionProvider(BaseProvider):
             return "SessionError: No sessions"
         return ""
 
+    def _extract_number_not_found(self, response):
+        """Return True when Evolution confirms recipient does not exist on WhatsApp."""
+        if response is None:
+            return False
+        raw = (response.text or "").strip().lower()
+        if '"exists":false' in raw:
+            return True
+        try:
+            payload = response.json()
+        except Exception:
+            return False
+        text = json.dumps(payload, ensure_ascii=False).lower()
+        return '"exists": false' in text or '"exists":false' in text
+
     def send_message(self, to_number, message, **kwargs):
         if not self._acquire_dedup("text", to_number, message or "", ttl=45):
             return {"id": "dedup-skip"}
@@ -114,6 +128,10 @@ class EvolutionProvider(BaseProvider):
                     session_error = self._extract_session_error(e.response)
                     if session_error:
                         seen_session_error = session_error
+                    if self._extract_number_not_found(e.response):
+                        raise frappe.ValidationError(
+                            f"Recipient number {to_number} is not registered on WhatsApp."
+                        )
                     status_code = e.response.status_code if e.response is not None else "?"
                     body = ""
                     if e.response is not None:
@@ -232,6 +250,10 @@ class EvolutionProvider(BaseProvider):
                     session_error = self._extract_session_error(e.response)
                     if session_error:
                         seen_session_error = session_error
+                    if self._extract_number_not_found(e.response):
+                        raise frappe.ValidationError(
+                            f"Recipient number {to_number} is not registered on WhatsApp."
+                        )
                     status_code = e.response.status_code if e.response is not None else "?"
                     has_file_name = bool(payload.get("fileName") or (payload.get("mediaMessage") or {}).get("fileName"))
                     mode = "base64" if has_file_name else "url"
