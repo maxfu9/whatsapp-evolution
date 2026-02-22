@@ -26,5 +26,37 @@ frappe.ui.form.on("WhatsApp Account", {
 				}
 			});
 		});
+
+		frm.add_custom_button(__('Check Number'), function() {
+			frappe.prompt(
+				[
+					{
+						fieldname: 'mobile_no',
+						label: __('Mobile Number'),
+						fieldtype: 'Data',
+						reqd: 1
+					}
+				],
+				function(values) {
+					frappe.call({
+						method: 'whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_account.whatsapp_account.check_recipient_number',
+						args: {
+							account: frm.doc.name,
+							number: values.mobile_no
+						},
+						callback: function(r) {
+							const info = r.message || {};
+							frappe.msgprint({
+								title: __('Recipient Check'),
+								indicator: info.exists === true ? 'green' : (info.exists === false ? 'red' : 'orange'),
+								message: frappe.utils.escape_html(info.message || __('No response'))
+							});
+						}
+					});
+				},
+				__('Check Recipient'),
+				__('Check')
+			);
+		});
 	},
 });

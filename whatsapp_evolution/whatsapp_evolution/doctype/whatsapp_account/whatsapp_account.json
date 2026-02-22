@@ -13,6 +13,7 @@
   "is_default",
   "is_default_incoming",
   "is_default_outgoing",
+  "strict_recipient_check",
   "section_break_evolution",
   "evolution_instance",
   "column_break_qx",
@@ -57,6 +58,13 @@
    "fieldname": "is_default_outgoing",
    "fieldtype": "Check",
    "label": "Default Outgoing"
+  },
+  {
+   "default": "0",
+   "description": "When enabled, recipient WhatsApp existence is verified before send.",
+   "fieldname": "strict_recipient_check",
+   "fieldtype": "Check",
+   "label": "Strict Recipient Pre-Check"
   },
   {
    "fieldname": "section_break_meta",

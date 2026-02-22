@@ -69,6 +69,23 @@ class EvolutionProvider(BaseProvider):
         urls.extend([self._build_url("/message/sendMedia"), self._build_url("/messages")])
         return [u for i, u in enumerate(urls) if u and u not in urls[:i]]
 
+    def _check_number_candidate_urls(self):
+        urls = []
+        if self.instance:
+            urls.extend(
+                [
+                    self._build_url(f"/chat/whatsappNumbers/{self.instance}"),
+                    self._build_url(f"/chat/checkNumber/{self.instance}"),
+                ]
+            )
+        urls.extend(
+            [
+                self._build_url("/chat/whatsappNumbers"),
+                self._build_url("/chat/checkNumber"),
+            ]
+        )
+        return [u for i, u in enumerate(urls) if u and u not in urls[:i]]
+
     def _extract_session_error(self, response):
         """Return Evolution session error text if present in response body."""
         if response is None:
@@ -101,7 +118,50 @@ class EvolutionProvider(BaseProvider):
         text = json.dumps(payload, ensure_ascii=False).lower()
         return '"exists": false' in text or '"exists":false' in text
 
+    def check_number_exists(self, to_number):
+        """Best-effort recipient existence check. Returns True/False/None."""
+        candidate_payloads = []
+        if self.instance:
+            candidate_payloads.append({"number": to_number, "instance": self.instance})
+            candidate_payloads.append({"numbers": [to_number], "instance": self.instance})
+        candidate_payloads.append({"number": to_number})
+        candidate_payloads.append({"numbers": [to_number]})
+
+        for url in self._check_number_candidate_urls():
+            for payload in candidate_payloads:
+                try:
+                    response = requests.post(url, json=payload, headers=self._headers(), timeout=15)
+                    if response.status_code == 404:
+                        continue
+                    response.raise_for_status()
+                    body = {}
+                    try:
+                        body = response.json() or {}
+                    except Exception:
+                        body = {}
+
+                    text = json.dumps(body, ensure_ascii=False).lower()
+                    if '"exists": false' in text or '"exists":false' in text:
+                        return False
+                    if '"exists": true' in text or '"exists":true' in text:
+                        return True
+                except Exception:
+                    continue
+        return None
+
     def send_message(self, to_number, message, **kwargs):
+        strict_check = bool(self.settings.get("strict_recipient_check"))
+        if strict_check:
+            exists = self.check_number_exists(to_number)
+            if exists is False:
+                raise frappe.ValidationError(
+                    f"Recipient number {to_number} is not registered on WhatsApp."
+                )
+            if exists is None:
+                raise frappe.ValidationError(
+                    "Recipient pre-check failed. Could not verify number on Evolution API."
+                )
+
         if not self._acquire_dedup("text", to_number, message or "", ttl=45):
             return {"id": "dedup-skip"}
 
@@ -148,6 +208,18 @@ class EvolutionProvider(BaseProvider):
         raise frappe.ValidationError(f"Evolution text send failed. Tried: {', '.join(errors)}")
 
     def send_media(self, to_number, media_url, media_type="document", caption="", media_bytes=None, filename=None):
+        strict_check = bool(self.settings.get("strict_recipient_check"))
+        if strict_check:
+            exists = self.check_number_exists(to_number)
+            if exists is False:
+                raise frappe.ValidationError(
+                    f"Recipient number {to_number} is not registered on WhatsApp."
+                )
+            if exists is None:
+                raise frappe.ValidationError(
+                    "Recipient pre-check failed. Could not verify number on Evolution API."
+                )
+
         if media_bytes:
             # Prefer content hash so signed URLs for same file don't bypass dedup.
             dedup_content = f"{media_type}|{caption or ''}|{hashlib.sha1(media_bytes).hexdigest()}"

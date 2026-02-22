@@ -234,6 +234,7 @@ def get_evolution_settings(whatsapp_account=None):
         "evolution_api_token": token,
         "evolution_instance": instance,
         "evolution_send_endpoint": send_endpoint,
+        "strict_recipient_check": frappe.utils.cint(account_doc.get("strict_recipient_check")) if account_doc else 0,
         "whatsapp_account": account_doc.name if account_doc else None,
     }
 

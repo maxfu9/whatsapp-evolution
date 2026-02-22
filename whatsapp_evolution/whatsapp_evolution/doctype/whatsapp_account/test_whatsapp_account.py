@@ -2,6 +2,7 @@
 # See license.txt
 
 import frappe
+from unittest.mock import patch
 from whatsapp_evolution.testing import IntegrationTestCase
 
 
@@ -135,3 +136,16 @@ class TestWhatsAppAccount(IntegrationTestCase):
         doc.reload()
         self.assertEqual(doc.is_default_incoming, 1)
         self.assertEqual(doc.is_default_outgoing, 1)
+
+    @patch("whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_account.whatsapp_account.EvolutionProvider.check_number_exists", return_value=True)
+    def test_check_recipient_number_success(self, mock_exists):
+        """Test account-level recipient existence check API."""
+        from whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_account.whatsapp_account import (
+            check_recipient_number,
+        )
+        doc = self._make_account(account_name="Test WA Account Check")
+        out = check_recipient_number(doc.name, "03001234567")
+        self.assertEqual(out.get("number"), "923001234567")
+        self.assertEqual(out.get("exists"), True)
+        self.assertEqual(out.get("status"), "connected")
+        self.assertTrue(mock_exists.called)
