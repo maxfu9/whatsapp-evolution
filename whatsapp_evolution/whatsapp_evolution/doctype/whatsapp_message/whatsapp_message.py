@@ -61,19 +61,6 @@ def _resolve_outgoing_account_name(preferred_account=None):
     return fallback.name if fallback else None
 
 
-def _resolve_print_format(doctype, explicit_print_format=None):
-    fmt = (explicit_print_format or "").strip()
-    if fmt:
-        return fmt
-    try:
-        meta = frappe.get_meta(doctype)
-        if meta and meta.default_print_format:
-            return meta.default_print_format
-    except Exception:
-        pass
-    return "Standard"
-
-
 def _get_ledger_balance_value(doc):
     try:
         from erpnext.accounts.utils import get_balance_on
@@ -624,16 +611,10 @@ class WhatsAppMessage(Document):
                 and "download_pdf" in (self.attach or "")
             ):
                 try:
-                    requested_format = None
-                    try:
-                        parsed = parse_qs(urlparse(self.attach or "").query)
-                        requested_format = (parsed.get("format") or [None])[0]
-                    except Exception:
-                        requested_format = None
                     print_data = frappe.attach_print(
                         self.reference_doctype,
                         self.reference_name,
-                        print_format=_resolve_print_format(self.reference_doctype, requested_format),
+                        print_format="Standard",
                     )
                     media_bytes = print_data.get("fcontent")
                     media_filename = print_data.get("fname")
@@ -668,7 +649,10 @@ class WhatsAppMessage(Document):
 
     def format_number(self, number):
         """Format number."""
-        return format_number(number)
+        if number.startswith("+"):
+            number = number[1 : len(number)]
+
+        return number
 
     @frappe.whitelist()
     def send_read_receipt(self):
@@ -760,7 +744,7 @@ def send_template_now(
         send_attach = attach
         if not send_attach and frappe.utils.cint(attach_document_print):
             key = frappe.get_doc(reference_doctype, reference_name).get_document_share_key()
-            fmt = _resolve_print_format(reference_doctype, print_format)
+            fmt = print_format or "Standard"
             send_attach = (
                 f"{frappe.utils.get_url()}/api/method/frappe.utils.print_format.download_pdf"
                 f"?doctype={reference_doctype}&name={reference_name}&format={fmt}&no_letterhead={frappe.utils.cint(no_letterhead)}&key={key}"
@@ -819,9 +803,7 @@ def send_custom(
     no_letterhead=0,
     whatsapp_account=None,
 ):
-    # Custom messages must always use the default outgoing account.
-    # Ignore any explicit account passed from client/background kwargs.
-    selected_account = _resolve_outgoing_account_name()
+    selected_account = _resolve_outgoing_account_name(whatsapp_account)
     queue_name = _create_queue_placeholder(
         to=to,
         reference_doctype=reference_doctype,
@@ -871,7 +853,7 @@ def send_custom_now(
     try:
         if not attach and frappe.utils.cint(attach_document_print):
             key = frappe.get_doc(reference_doctype, reference_name).get_document_share_key()
-            fmt = _resolve_print_format(reference_doctype, print_format)
+            fmt = print_format or "Standard"
             attach = (
                 f"{frappe.utils.get_url()}/api/method/frappe.utils.print_format.download_pdf"
                 f"?doctype={reference_doctype}&name={reference_name}&format={fmt}&no_letterhead={frappe.utils.cint(no_letterhead)}&key={key}"
@@ -890,9 +872,7 @@ def send_custom_now(
             _update_queue_status(queued_message_name, "Skipped", details="Duplicate prevented")
             return
 
-        # Custom messages must always use the default outgoing account.
-        # Ignore any explicit account passed from queued kwargs.
-        selected_account = _resolve_outgoing_account_name()
+        selected_account = _resolve_outgoing_account_name(whatsapp_account)
         doc = frappe.get_doc(
             {
                 "doctype": "WhatsApp Message",
@@ -965,10 +945,6 @@ def get_linked_contacts_query(doctype, txt, searchfield, start, page_len, filter
             value = ref_doc.get(field)
             if value:
                 links.add((field.title(), value))
-        party_type = ref_doc.get("party_type")
-        party = ref_doc.get("party")
-        if party_type and party:
-            links.add((party_type, party))
     except Exception:
         pass
 
@@ -1010,78 +986,3 @@ def get_linked_contacts_query(doctype, txt, searchfield, start, page_len, filter
         """,
         values,
     )
-
-
-@frappe.whitelist()
-def get_primary_whatsapp_number(reference_doctype, reference_name):
-    if not reference_doctype or not reference_name:
-        return {"mobile_no": ""}
-
-    if not frappe.db.exists(reference_doctype, reference_name):
-        return {"mobile_no": ""}
-
-    doc = frappe.get_doc(reference_doctype, reference_name)
-    candidates = [
-        (doc.get("mobile_no"), None),
-        (doc.get("mobile"), None),
-        (doc.get("phone"), None),
-        (doc.get("contact_mobile"), None),
-        (doc.get("whatsapp_no"), None),
-    ]
-
-    contact_name = doc.get("contact_person")
-    if contact_name and frappe.db.exists("Contact", contact_name):
-        row = frappe.db.get_value("Contact", contact_name, ["mobile_no", "phone"], as_dict=True)
-        if row:
-            candidates.extend(
-                [
-                    (row.get("mobile_no"), contact_name),
-                    (row.get("phone"), contact_name),
-                ]
-            )
-
-    party_type = doc.get("party_type")
-    party = doc.get("party")
-    if party_type and party:
-        contact_names = frappe.get_all(
-            "Dynamic Link",
-            filters={
-                "link_doctype": party_type,
-                "link_name": party,
-                "parenttype": "Contact",
-            },
-            pluck="parent",
-        )
-        if contact_names:
-            for row in frappe.get_all(
-                "Contact",
-                filters={"name": ["in", contact_names]},
-                fields=["name", "mobile_no", "phone", "is_primary_contact"],
-                order_by="is_primary_contact desc, modified desc",
-                limit=5,
-            ):
-                contact_ref = row.get("name")
-                candidates.extend(
-                    [
-                        (row.get("mobile_no"), contact_ref),
-                        (row.get("phone"), contact_ref),
-                    ]
-                )
-
-    employee_name = doc.get("employee") or doc.get("employee_name")
-    if employee_name and frappe.db.exists("DocType", "Employee") and frappe.db.exists("Employee", employee_name):
-        cell_number = frappe.db.get_value("Employee", employee_name, "cell_number")
-        candidates.append((cell_number, None))
-
-    if party_type == "Employee" and party and frappe.db.exists("DocType", "Employee") and frappe.db.exists("Employee", party):
-        party_cell_number = frappe.db.get_value("Employee", party, "cell_number")
-        candidates.append((party_cell_number, None))
-
-    for number, selected_contact in candidates:
-        if not number:
-            continue
-        normalized = format_number(str(number).strip())
-        if normalized:
-            return {"mobile_no": normalized, "contact": selected_contact or ""}
-
-    return {"mobile_no": "", "contact": ""}

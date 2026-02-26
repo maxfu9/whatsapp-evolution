@@ -87,10 +87,7 @@ function open_whatsapp_dialog(frm) {
 				label: __("Attach Document Print (PDF)"),
 				fieldname: "attach_document_print",
 				fieldtype: "Check",
-				default: 0,
-				change() {
-					toggle_attachment_field(dialog);
-				}
+				default: 0
 			},
 			{
 				label: __("Print Format"),
@@ -172,9 +169,7 @@ function toggle_attachment_field(dialog) {
 	if (!attach_field) {
 		return;
 	}
-	const needs_media = mode === "Custom" && type !== "text";
-	const use_print = Number(dialog.get_value("attach_document_print") || 0) === 1;
-	attach_field.df.reqd = needs_media && !use_print ? 1 : 0;
+	attach_field.df.reqd = mode === "Custom" && type !== "text" ? 1 : 0;
 	attach_field.refresh();
 }
 
@@ -213,13 +208,6 @@ function send_whatsapp_message(frm, dialog, values) {
 		args.attach_document_print = values.attach_document_print ? 1 : 0;
 		args.print_format = values.print_format || "";
 		args.no_letterhead = values.no_letterhead ? 1 : 0;
-
-		if (args.content_type !== "text" && !args.attach && !args.attach_document_print) {
-			frappe.msgprint(
-				__("For media custom messages, select Attachment or enable Attach Document Print (PDF).")
-			);
-			return;
-		}
 	}
 
 	frappe.call({
@@ -328,26 +316,7 @@ function autofill_mobile_from_doc(frm, dialog) {
 
 	if (candidates.length) {
 		dialog.set_value("mobile_no", candidates[0]);
-		return;
 	}
-
-	frappe.call({
-		method: "whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_message.whatsapp_message.get_primary_whatsapp_number",
-		args: {
-			reference_doctype: frm.doc.doctype,
-			reference_name: frm.doc.name
-		},
-		callback(r) {
-			const mobile = (r.message && r.message.mobile_no) || "";
-			const contact = (r.message && r.message.contact) || "";
-			if (contact) {
-				dialog.set_value("contact", contact);
-			}
-			if (mobile) {
-				dialog.set_value("mobile_no", mobile);
-			}
-		}
-	});
 }
 
 function load_template_preview(frm, dialog) {

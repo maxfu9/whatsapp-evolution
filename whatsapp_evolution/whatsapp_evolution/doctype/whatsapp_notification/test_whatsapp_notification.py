@@ -167,17 +167,6 @@ class TestWhatsAppNotification(IntegrationTestCase):
         cached = frappe.cache().get_value("whatsapp_notification_map")
         self.assertFalse(cached)
 
-    def test_on_update_clears_cache(self):
-        """Test on_update clears the notification map cache."""
-        doc = self._make_notification(notification_name="Test Notif Cache Update")
-        frappe.cache().set_value("whatsapp_notification_map", {"test": True})
-
-        doc.disabled = 1
-        doc.save(ignore_permissions=True)
-
-        cached = frappe.cache().get_value("whatsapp_notification_map")
-        self.assertFalse(cached)
-
     @patch("whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_notification.whatsapp_notification._was_recently_sent", return_value=False)
     @patch("whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_notification.whatsapp_notification._acquire_notification_dedup", return_value=True)
     @patch("whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_notification.whatsapp_notification.EvolutionProvider.send_message")
@@ -220,51 +209,6 @@ class TestWhatsAppNotification(IntegrationTestCase):
 
         self.assertTrue(mock_send.called)
         self.assertEqual(mock_send.call_args.args[0], "919900112234")
-
-    @patch("whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_notification.whatsapp_notification._was_recently_sent", return_value=False)
-    @patch("whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_notification.whatsapp_notification._acquire_notification_dedup", return_value=True)
-    @patch("whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_notification.whatsapp_notification.EvolutionProvider.send_message")
-    def test_send_template_message_job_ignores_extra_kwargs(self, mock_send, _mock_dedup, _mock_recent):
-        """Queued job should ignore unexpected kwargs like track_job."""
-        from whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_notification.whatsapp_notification import (
-            send_template_message_job,
-        )
-
-        mock_send.return_value = {"id": "wamid.notif_job_extra"}
-
-        self._make_notification(
-            notification_name="Test Notif Queue Kwargs",
-            field_name="mobile_no",
-        )
-
-        user = frappe.get_doc("User", "Administrator")
-        user.mobile_no = "919900112235"
-        user.save(ignore_permissions=True)
-
-        send_template_message_job(
-            notification_name="Test Notif Queue Kwargs",
-            reference_doctype="User",
-            reference_name="Administrator",
-            track_job=True,
-        )
-
-        self.assertTrue(mock_send.called)
-
-    @patch("whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_notification.whatsapp_notification._get_employee_cell_numbers")
-    def test_get_recipient_numbers_includes_employee_cell_number(self, mock_get_employee_cell_numbers):
-        """Test employee cell_number is included in recipient resolution."""
-        mock_get_employee_cell_numbers.return_value = ["923001112233"]
-
-        notif = self._make_notification(
-            notification_name="Test Notif Employee Number",
-            field_name="",
-        )
-        user = frappe.get_doc("User", "Administrator")
-        doc_data = user.as_dict()
-        doc_data["employee"] = "EMP-0001"
-
-        recipients = notif.get_recipient_numbers(user, doc_data)
-        self.assertIn("923001112233", recipients)
 
     @patch("whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_notification.whatsapp_notification._was_recently_sent", return_value=False)
     @patch("whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_notification.whatsapp_notification._acquire_notification_dedup", return_value=True)

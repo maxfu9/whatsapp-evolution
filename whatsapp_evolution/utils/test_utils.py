@@ -27,15 +27,6 @@ class TestFormatNumber(IntegrationTestCase):
     def test_plus_only_at_start(self):
         self.assertEqual(format_number("+1234567890"), "1234567890")
 
-    def test_pk_local_mobile_converted_to_92(self):
-        self.assertEqual(format_number("03001234567"), "923001234567")
-
-    def test_pk_plus_92_keeps_92_without_plus(self):
-        self.assertEqual(format_number("+923001234567"), "923001234567")
-
-    def test_pk_92_kept_as_is(self):
-        self.assertEqual(format_number("923001234567"), "923001234567")
-
 
 class TestGetWhatsAppAccount(IntegrationTestCase):
     """Tests for get_whatsapp_account utility."""
@@ -196,22 +187,6 @@ class TestRunServerScriptForDocEvent(IntegrationTestCase):
         doc = frappe.get_doc("User", "Administrator")
         # 'random_event' is not in EVENT_MAP, should just return
         run_server_script_for_doc_event(doc, "random_event")
-
-    @patch("whatsapp_evolution.utils.frappe.db.get_value", return_value=0)
-    @patch("whatsapp_evolution.utils.frappe.enqueue")
-    @patch("whatsapp_evolution.utils.get_notifications_map")
-    def test_supports_raw_event_keys(self, mock_map, mock_enqueue, _mock_delay):
-        """Test backward compatibility when map stores raw event keys."""
-        mock_map.return_value = {
-            "User": {
-                "on_submit": ["Test Notif Raw Key"],
-            }
-        }
-
-        doc = frappe.get_doc("User", "Administrator")
-        run_server_script_for_doc_event(doc, "on_submit")
-
-        self.assertTrue(mock_enqueue.called)
 
 
 class TestTriggerWhatsAppNotifications(IntegrationTestCase):

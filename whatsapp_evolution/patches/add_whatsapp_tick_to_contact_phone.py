@@ -16,6 +16,14 @@ def execute():
                     "insert_after": "is_primary_mobile_no",
                     "default": 0,
                     "in_list_view": 1,
+                },
+                {
+                    "fieldname": "is_notification_number",
+                    "label": "Notification",
+                    "fieldtype": "Check",
+                    "insert_after": "is_whatsapp_number",
+                    "default": 0,
+                    "in_list_view": 1,
                 }
             ]
         },

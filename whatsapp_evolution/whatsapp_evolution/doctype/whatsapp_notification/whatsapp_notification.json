@@ -26,6 +26,8 @@
   "attach_from_field",
   "file_name",
   "section_break_11",
+  "send_to_all_assignees",
+  "recipients",
   "condition",
   "column_break_12",
   "fields",
@@ -105,6 +107,18 @@
    "label": "Template",
    "options": "WhatsApp Templates",
    "reqd": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "send_to_all_assignees",
+   "fieldtype": "Check",
+   "label": "Send To All Assignees"
+  },
+  {
+   "fieldname": "recipients",
+   "fieldtype": "Table",
+   "label": "Recipients",
+   "options": "Notification Recipient"
   },
   {
    "fieldname": "condition",
