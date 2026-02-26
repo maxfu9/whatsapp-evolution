@@ -2,8 +2,6 @@
 
 WhatsApp integration for Frappe/ERPNext using Evolution API.
 
-Publisher: Europlast  
-Contact: hello@europlast.pk
 
 ## What This App Supports
 
