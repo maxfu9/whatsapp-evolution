@@ -87,7 +87,24 @@ function open_whatsapp_dialog(frm) {
 				label: __("Attach Document Print (PDF)"),
 				fieldname: "attach_document_print",
 				fieldtype: "Check",
-				default: 0
+				default: 0,
+				change() {
+					if (dialog.get_value("attach_document_print") && !dialog.get_value("print_format")) {
+						frappe.call({
+							method: "frappe.client.get_value",
+							args: {
+								doctype: "DocType",
+								filters: { name: frm.doc.doctype },
+								fieldname: "default_print_format"
+							},
+							callback: function (r) {
+								if (r.message && r.message.default_print_format) {
+									dialog.set_value("print_format", r.message.default_print_format);
+								}
+							}
+						});
+					}
+				}
 			},
 			{
 				label: __("Print Format"),

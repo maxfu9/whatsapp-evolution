@@ -98,6 +98,14 @@ frappe.ui.form.on('WhatsApp Notification', {
 		frm.trigger("load_template")
 		frappe.notification.setup_fieldname_select(frm);
 		frappe.notification.setup_alerts_button(frm);
+
+		frm.set_query("print_format", function () {
+			return {
+				filters: {
+					doc_type: frm.doc.reference_doctype
+				}
+			};
+		});
 	},
 	template: function (frm) {
 		frm.trigger("load_template")
@@ -115,8 +123,9 @@ frappe.ui.form.on('WhatsApp Notification', {
 						frm.toggle_display("custom_attachment", true);
 						frm.toggle_display("attach_document_print", true);
 						if (!frm.doc.custom_attachment) {
-							frm.set_value("attach_document_print", 1)
+							frm.set_value("attach_document_print", 1);
 						}
+						frm.trigger("attach_document_print");
 					} else {
 						frm.toggle_display("custom_attachment", false);
 						frm.toggle_display("attach_document_print", false);
@@ -149,8 +158,30 @@ frappe.ui.form.on('WhatsApp Notification', {
 		if (['DOCUMENT', "IMAGE"].includes(frm.doc.header_type)) {
 			frm.set_value("custom_attachment", !frm.doc.attach_document_print)
 		}
+		if (frm.doc.attach_document_print && !frm.doc.print_format && frm.doc.reference_doctype) {
+			frappe.call({
+				method: "frappe.client.get_value",
+				args: {
+					doctype: "DocType",
+					filters: { name: frm.doc.reference_doctype },
+					fieldname: "default_print_format"
+				},
+				callback: function (r) {
+					if (r.message && r.message.default_print_format) {
+						frm.set_value("print_format", r.message.default_print_format);
+					}
+				}
+			});
+		}
 	},
 	reference_doctype: function (frm) {
 		frappe.notification.setup_fieldname_select(frm);
+		frm.set_query("print_format", function () {
+			return {
+				filters: {
+					doc_type: frm.doc.reference_doctype
+				}
+			};
+		});
 	},
 });

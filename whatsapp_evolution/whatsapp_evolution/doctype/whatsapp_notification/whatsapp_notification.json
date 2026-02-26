@@ -21,6 +21,7 @@
   "template",
   "code",
   "attach_document_print",
+  "print_format",
   "custom_attachment",
   "attach",
   "attach_from_field",
@@ -159,6 +160,13 @@
    "fieldname": "attach_document_print",
    "fieldtype": "Check",
    "label": " Attach Document Print"
+  },
+  {
+   "depends_on": "eval:doc.attach_document_print",
+   "fieldname": "print_format",
+   "fieldtype": "Link",
+   "label": "Print Format",
+   "options": "Print Format"
   },
   {
    "default": "0",
