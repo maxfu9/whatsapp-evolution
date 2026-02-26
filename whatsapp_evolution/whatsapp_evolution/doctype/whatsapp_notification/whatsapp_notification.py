@@ -630,10 +630,13 @@ class WhatsAppNotification(Document):
             numbers.extend(_split_candidate_numbers(phone_no))
 
         contact_found = False
-
         val_doctype = getattr(doc, "doctype", None)
         val_name = getattr(doc, "name", None)
 
+        # Sensitivity Check: Determine if this is an entity where we must be strict about authorization
+        is_sensitive_entity = val_doctype in ("Customer", "Supplier", "Lead", "Prospect", "Contact")
+
+        # 1. Handle Direct Contact or Linked Entity
         if val_doctype == "Contact" and val_name:
             numbers.extend(_get_contact_numbers(val_name))
             contact_found = True
@@ -644,13 +647,25 @@ class WhatsAppNotification(Document):
                 numbers.extend(_get_dynamic_link_contact_numbers(val_doctype, val_name))
                 contact_found = True
 
+        # 2. Handle Explicit Field Selection
         if self.field_name:
             value = doc_data.get(self.field_name)
-            numbers.extend(_split_candidate_numbers(value))
+            # For sensitive entities, we only allow field_name if it resolves to a check-marked Contact.
+            # We skip adding the raw value directly at this stage if is_sensitive_entity is True.
+            if not is_sensitive_entity:
+                numbers.extend(_split_candidate_numbers(value))
+
             if value and frappe.db.exists("Contact", value):
                 numbers.extend(_get_contact_numbers(value))
                 contact_found = True
+            elif is_sensitive_entity and _looks_like_phone(value):
+                # If it's a phone number string in a sensitive doc's field, we do NOT add it unless unauthorized fallback is okay.
+                # Per user request: "Only sent to those whose... check in contact list".
+                # However, if explicitly chosen in field_name, some legacy users might expect it.
+                # But to be safe and follow the request "Sensitive information", we stay strict.
+                pass
 
+        # 3. Handle Other Linked Contact Fields
         contact_person = doc_data.get("contact_person")
         if contact_person and frappe.db.exists("Contact", contact_person):
             numbers.extend(_get_contact_numbers(contact_person))
@@ -673,10 +688,13 @@ class WhatsAppNotification(Document):
                     numbers.extend(_get_dynamic_link_contact_numbers(linked_dt, linked_name))
                     contact_found = True
 
-        if not contact_found:
+        # 4. Fallbacks (Disabled for Sensitive Entities)
+        # If no contacts were found at all, and it's NOT a sensitive entity, we fall back to raw fields.
+        if not contact_found and not is_sensitive_entity:
             for field in ("contact_mobile", "mobile_no", "mobile", "phone", "contact_phone"):
                 numbers.extend(_split_candidate_numbers(doc_data.get(field)))
 
+        # 5. System Users (Roles/Assignees) are always authorized via their System Profile
         sys_numbers = self._get_system_user_numbers(doc, doc_data)
         for num in sys_numbers:
             numbers.extend(_split_candidate_numbers(num))
