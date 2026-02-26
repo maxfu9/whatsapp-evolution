@@ -1,5 +1,7 @@
 import frappe
+from frappe import _
 from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
+from frappe.custom.doctype.property_setter.property_setter import make_property_setter
 
 def setup_custom_fields():
     custom_fields = {
@@ -68,3 +70,27 @@ def setup_custom_fields():
     }
 
     create_custom_fields(custom_fields, update=True)
+    add_whatsapp_communication_medium()
+
+def add_whatsapp_communication_medium():
+    # Communication Medium
+    options = frappe.get_meta('Communication').get_field('communication_medium').options
+    if "WhatsApp" not in options:
+        make_property_setter(
+            'Communication', 
+            'communication_medium', 
+            'options', 
+            options + '\nWhatsApp', 
+            'Select'
+        )
+    
+    # Delivery Status
+    ds_options = frappe.get_meta('Communication').get_field('delivery_status').options
+    if "Delivered" not in ds_options:
+        make_property_setter(
+            'Communication', 
+            'delivery_status', 
+            'options', 
+            ds_options + '\nDelivered', 
+            'Select'
+        )

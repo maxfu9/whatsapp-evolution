@@ -304,8 +304,12 @@ class WhatsAppMessage(Document):
     def validate(self):
         self.set_whatsapp_account()
 
+    def after_insert(self):
+        self.create_communication()
+
     def on_update(self):
         self.update_profile_name()
+        self.update_communication()
 
     def update_profile_name(self):
         number = self.get("from")
@@ -653,6 +657,65 @@ class WhatsAppMessage(Document):
             number = number[1 : len(number)]
 
         return number
+
+    def create_communication(self):
+        if not self.reference_doctype or not self.reference_name:
+            return
+
+        # Check if communication already exists to avoid duplicates
+        if frappe.db.exists("Communication", {"link_doctype": "WhatsApp Message", "link_name": self.name}):
+            return
+
+        content = self.message or ""
+        if self.attach:
+            # Add attachment link to content for timeline visibility
+            link = self.attach
+            if not link.startswith("http"):
+                link = frappe.utils.get_url(self.attach)
+            content += f"<br><br><a href='{link}' target='_blank'><b>{_('View Attachment')}</b></a>"
+
+        subject = _("WhatsApp Outgoing") if self.type == "Outgoing" else _("WhatsApp Incoming")
+        if self.template:
+            subject += f" ({self.template})"
+
+        comm = frappe.get_doc({
+            "doctype": "Communication",
+            "communication_type": "Communication",
+            "communication_medium": "WhatsApp", # We'll ensure this option exists
+            "subject": subject,
+            "content": content,
+            "sender": self.whatsapp_account if self.type == "Outgoing" else self.profile_name or self.get("from"),
+            "recipients": self.to if self.type == "Outgoing" else self.whatsapp_account,
+            "reference_doctype": self.reference_doctype,
+            "reference_name": self.reference_name,
+            "link_doctype": "WhatsApp Message",
+            "link_name": self.name,
+            "sent_or_received": "Sent" if self.type == "Outgoing" else "Received",
+        })
+        comm.insert(ignore_permissions=True)
+
+    def update_communication(self):
+        if not self.has_value_changed("status") and not self.has_value_changed("message_id"):
+            return
+            
+        comm_name = frappe.db.get_value("Communication", {"link_doctype": "WhatsApp Message", "link_name": self.name})
+        if comm_name:
+            status_map = {
+                "Sent": "Sent",
+                "Delivered": "Delivered",
+                "Read": "Read",
+                "Failed": "Error",
+                "Queued": "Scheduled"
+            }
+            frappe.db.set_value(
+                "Communication", 
+                comm_name, 
+                {
+                    "delivery_status": status_map.get(self.status, "Sent"),
+                    "message_id": self.message_id
+                }, 
+                update_modified=True
+            )
 
     @frappe.whitelist()
     def send_read_receipt(self):

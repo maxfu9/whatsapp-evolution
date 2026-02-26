@@ -254,14 +254,51 @@ class EvolutionProvider(BaseProvider):
         )
 
     def parse_incoming(self, data):
-        if not all(k in data for k in ("from", "text", "id", "timestamp")):
-            raise ValueError("Invalid incoming payload")
-        return {
-            "from": data["from"],
-            "body": data["text"],
-            "message_id": data["id"],
-            "timestamp": data["timestamp"],
-        }
+        event = data.get("event")
+        payload = data.get("data") or {}
+
+        if event == "messages.upsert":
+            message = payload.get("message") or {}
+            key = payload.get("key") or {}
+            
+            # Extract number
+            sender = key.get("remoteJid") or ""
+            if "@" in sender:
+                sender = sender.split("@")[0]
+            
+            # Extract text
+            text = (
+                message.get("conversation") 
+                or (message.get("extendedTextMessage") or {}).get("text")
+                or (message.get("imageMessage") or {}).get("caption")
+                or (message.get("videoMessage") or {}).get("caption")
+                or ""
+            )
+            
+            return {
+                "event": event,
+                "from": sender,
+                "body": text,
+                "message_id": key.get("id"),
+                "timestamp": payload.get("messageTimestamp"),
+                "is_from_me": key.get("fromMe", False)
+            }
+            
+        elif event == "messages.update":
+            # Status update (ACK)
+            key = payload.get("key") or {}
+            update = payload.get("update") or {}
+            status = update.get("status")
+            
+            return {
+                "event": event,
+                "message_id": key.get("id"),
+                "status": status,
+                "to": (key.get("remoteJid") or "").split("@")[0],
+                "is_from_me": key.get("fromMe", True)
+            }
+
+        return {"event": event}
 
     def test_connection(self):
         """Check API reachability and instance session status."""
@@ -312,12 +349,40 @@ def handle_webhook():
     data = frappe.local.request.get_json(silent=True) or {}
     if not data:
         return "No payload"
-    provider = EvolutionProvider(frappe.get_single("WhatsApp Settings").as_dict())
-    try:
-        msg = provider.parse_incoming(data)
-    except ValueError:
-        return "Invalid payload"
-    from whatsapp_evolution.incoming import handle_incoming_message
+    
+    event_type = data.get("event")
+    if not event_type:
+        return "No event"
 
-    handle_incoming_message(msg)
+    provider = EvolutionProvider(frappe.get_single("WhatsApp Settings").as_dict())
+    msg = provider.parse_incoming(data)
+    
+    if event_type == "messages.upsert":
+        if msg.get("is_from_me"):
+            # Update outgoing message status if we find it by ID
+            if msg.get("message_id"):
+                frappe.db.set_value("WhatsApp Message", {"message_id": msg.get("message_id")}, "status", "Sent")
+            return "OK"
+            
+        from whatsapp_evolution.incoming import handle_incoming_message
+        handle_incoming_message(msg)
+        
+    elif event_type == "messages.update":
+        status_code = msg.get("status")
+        message_id = msg.get("message_id")
+        
+        if message_id and status_code is not None:
+            # Map Evolution ACK levels
+            # 2 = Delivered (Two Ticks)
+            # 3 = Read (Two Blue Ticks)
+            status_map = {
+                1: "Sent",
+                2: "Delivered",
+                3: "Read",
+                4: "Played"
+            }
+            status_text = status_map.get(status_code)
+            if status_text:
+                frappe.db.set_value("WhatsApp Message", {"message_id": message_id}, "status", status_text)
+
     return "OK"
