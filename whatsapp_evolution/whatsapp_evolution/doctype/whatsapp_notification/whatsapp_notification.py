@@ -132,27 +132,45 @@ def _dedupe_numbers(numbers):
     return out
 
 
-def _get_whatsapp_tick_fields():
+def _get_tick_fields(purpose="notification"):
+    """
+    Find fields in Contact Phone that match the requested purpose.
+    purpose='notification' -> fields containing 'notification'
+    purpose='whatsapp' -> fields containing 'whatsapp'
+    """
     meta = frappe.get_meta("Contact Phone")
     tick_fields = []
+    search_term = purpose.lower()
+    
     for field in meta.fields:
-        if field.fieldtype == "Check" and ("whatsapp" in field.fieldname.lower() or "notification" in field.fieldname.lower()):
+        if field.fieldtype == "Check" and search_term in field.fieldname.lower():
             tick_fields.append(field.fieldname)
             
-    for default_field in ("is_whatsapp_number", "is_whatsapp", "whatsapp"):
-        if meta.get_field(default_field) and default_field not in tick_fields:
-            tick_fields.append(default_field)
+    # Fallbacks for standard naming
+    if purpose == "whatsapp":
+        for default_field in ("is_whatsapp_number", "is_whatsapp", "whatsapp"):
+            if meta.get_field(default_field) and default_field not in tick_fields:
+                tick_fields.append(default_field)
+    elif purpose == "notification":
+        for default_field in ("is_notification_number", "is_notification", "notification"):
+            if meta.get_field(default_field) and default_field not in tick_fields:
+                tick_fields.append(default_field)
 
     return tick_fields
 
 
-def _get_contact_numbers(contact_name):
+@frappe.whitelist()
+def get_contact_whatsapp_numbers(contact_name):
+    return _get_contact_numbers(contact_name, purpose="whatsapp")
+
+
+def _get_contact_numbers(contact_name, purpose="notification"):
     if not contact_name or not frappe.db.exists("Contact", contact_name):
         return []
 
     contact = frappe.get_doc("Contact", contact_name)
     phone_rows = contact.get("phone_nos") or []
-    tick_fields = _get_whatsapp_tick_fields()
+    tick_fields = _get_tick_fields(purpose=purpose)
 
     numbers = []
     if tick_fields:
@@ -161,6 +179,7 @@ def _get_contact_numbers(contact_name):
                 numbers.extend(_split_candidate_numbers(row.get("phone")))
         return _dedupe_numbers(numbers)
 
+    # Fallback if no tick fields exist at all in the system
     for row in phone_rows:
         numbers.extend(_split_candidate_numbers(row.get("phone")))
 
@@ -171,7 +190,7 @@ def _get_contact_numbers(contact_name):
     return _dedupe_numbers(numbers)
 
 
-def _get_dynamic_link_contact_numbers(link_doctype, link_name):
+def _get_dynamic_link_contact_numbers(link_doctype, link_name, purpose="notification"):
     if not link_doctype or not link_name:
         return []
 
@@ -186,7 +205,7 @@ def _get_dynamic_link_contact_numbers(link_doctype, link_name):
     )
     numbers = []
     for contact_name in contact_names:
-        numbers.extend(_get_contact_numbers(contact_name))
+        numbers.extend(_get_contact_numbers(contact_name, purpose=purpose))
     return _dedupe_numbers(numbers)
 
 
@@ -638,13 +657,13 @@ class WhatsAppNotification(Document):
 
         # 1. Handle Direct Contact or Linked Entity
         if val_doctype == "Contact" and val_name:
-            numbers.extend(_get_contact_numbers(val_name))
+            numbers.extend(_get_contact_numbers(val_name, purpose="notification"))
             contact_found = True
 
         if val_doctype in ("Customer", "Supplier", "Lead", "Prospect") and val_name:
             has_links = frappe.db.exists("Dynamic Link", {"link_doctype": val_doctype, "link_name": val_name, "parenttype": "Contact"})
             if has_links:
-                numbers.extend(_get_dynamic_link_contact_numbers(val_doctype, val_name))
+                numbers.extend(_get_dynamic_link_contact_numbers(val_doctype, val_name, purpose="notification"))
                 contact_found = True
 
         # 2. Handle Explicit Field Selection
@@ -656,7 +675,7 @@ class WhatsAppNotification(Document):
                 numbers.extend(_split_candidate_numbers(value))
 
             if value and frappe.db.exists("Contact", value):
-                numbers.extend(_get_contact_numbers(value))
+                numbers.extend(_get_contact_numbers(value, purpose="notification"))
                 contact_found = True
             elif is_sensitive_entity and _looks_like_phone(value):
                 # If it's a phone number string in a sensitive doc's field, we do NOT add it unless unauthorized fallback is okay.
@@ -668,7 +687,7 @@ class WhatsAppNotification(Document):
         # 3. Handle Other Linked Contact Fields
         contact_person = doc_data.get("contact_person")
         if contact_person and frappe.db.exists("Contact", contact_person):
-            numbers.extend(_get_contact_numbers(contact_person))
+            numbers.extend(_get_contact_numbers(contact_person, purpose="notification"))
             contact_found = True
 
         party_type = doc_data.get("party_type")
@@ -676,7 +695,7 @@ class WhatsAppNotification(Document):
         if party_type and party:
             has_links = frappe.db.exists("Dynamic Link", {"link_doctype": party_type, "link_name": party, "parenttype": "Contact"})
             if has_links:
-                numbers.extend(_get_dynamic_link_contact_numbers(party_type, party))
+                numbers.extend(_get_dynamic_link_contact_numbers(party_type, party, purpose="notification"))
                 contact_found = True
 
         for linked_dt_field in ("customer", "supplier", "lead", "prospect"):
@@ -685,7 +704,7 @@ class WhatsAppNotification(Document):
                 linked_dt = linked_dt_field.title()
                 has_links = frappe.db.exists("Dynamic Link", {"link_doctype": linked_dt, "link_name": linked_name, "parenttype": "Contact"})
                 if has_links:
-                    numbers.extend(_get_dynamic_link_contact_numbers(linked_dt, linked_name))
+                    numbers.extend(_get_dynamic_link_contact_numbers(linked_dt, linked_name, purpose="notification"))
                     contact_found = True
 
         # 4. Fallbacks (Disabled for Sensitive Entities)

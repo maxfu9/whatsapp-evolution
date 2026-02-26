@@ -962,6 +962,14 @@ def get_linked_contacts_query(doctype, txt, searchfield, start, page_len, filter
     if not conditions:
         return []
 
+    # Get WhatsApp tick fields dynamically
+    from whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_notification.whatsapp_notification import _get_tick_fields
+    tick_fields = _get_tick_fields(purpose="whatsapp")
+    
+    tick_condition = ""
+    if tick_fields:
+        tick_condition = "and (" + " or ".join([f"ifnull(cp.{tf}, 0) = 1" for tf in tick_fields]) + ")"
+
     searchfield = sanitize_searchfield(searchfield)
     return frappe.db.sql(
         f"""
@@ -971,7 +979,10 @@ def get_linked_contacts_query(doctype, txt, searchfield, start, page_len, filter
         from `tabContact` c
         inner join `tabDynamic Link` dl
             on dl.parent = c.name and dl.parenttype = 'Contact'
+        inner join `tabContact Phone` cp
+            on cp.parent = c.name
         where ({' or '.join(conditions)})
+            {tick_condition}
             and (
                 c.name like %(txt)s
                 or ifnull(c.first_name, '') like %(txt)s
@@ -986,3 +997,22 @@ def get_linked_contacts_query(doctype, txt, searchfield, start, page_len, filter
         """,
         values,
     )
+@frappe.whitelist()
+def get_authorized_whatsapp_numbers(reference_doctype, reference_name):
+    from whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_notification.whatsapp_notification import _get_dynamic_link_contact_numbers
+    
+    numbers = _get_dynamic_link_contact_numbers(reference_doctype, reference_name, purpose="whatsapp")
+    
+    # Also check the document itself if it is a Contact
+    if reference_doctype == "Contact":
+        from whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_notification.whatsapp_notification import _get_contact_numbers
+        numbers.extend(_get_contact_numbers(reference_name, purpose="whatsapp"))
+        
+    # Return deduped list
+    seen = set()
+    out = []
+    for n in numbers:
+        if n and n not in seen:
+            seen.add(n)
+            out.append(n)
+    return out

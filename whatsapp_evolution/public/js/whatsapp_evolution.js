@@ -293,30 +293,48 @@ function populate_mobile_from_contact(dialog) {
 		return;
 	}
 	frappe.call({
-		method: "frappe.client.get_value",
+		method: "whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_notification.whatsapp_notification.get_contact_whatsapp_numbers",
 		args: {
-			doctype: "Contact",
-			filters: { name: contact_name },
-			fieldname: ["mobile_no"]
+			contact_name: contact_name
 		},
 		callback(r) {
-			dialog.set_value("mobile_no", (r.message && r.message.mobile_no) || "");
+			const numbers = r.message || [];
+			if (numbers.length) {
+				dialog.set_value("mobile_no", numbers[0]);
+			}
 		}
 	});
 }
 
 function autofill_mobile_from_doc(frm, dialog) {
-	const candidates = [
-		frm.doc.mobile_no,
-		frm.doc.mobile,
-		frm.doc.phone,
-		frm.doc.contact_mobile,
-		frm.doc.whatsapp_no
-	].filter(Boolean);
+	// For manual dialogue, we want to be helpful but strict.
+	// We'll call the backend to get all "WhatsApp" authorized numbers for this document.
+	frappe.call({
+		method: "whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_message.whatsapp_message.get_authorized_whatsapp_numbers",
+		args: {
+			reference_doctype: frm.doc.doctype,
+			reference_name: frm.doc.name
+		},
+		callback(r) {
+			const numbers = r.message || [];
+			if (numbers.length) {
+				dialog.set_value("mobile_no", numbers[0]);
+			} else {
+				// Fallback to basic field pull
+				const candidates = [
+					frm.doc.mobile_no,
+					frm.doc.mobile,
+					frm.doc.phone,
+					frm.doc.contact_mobile,
+					frm.doc.whatsapp_no
+				].filter(Boolean);
 
-	if (candidates.length) {
-		dialog.set_value("mobile_no", candidates[0]);
-	}
+				if (candidates.length) {
+					dialog.set_value("mobile_no", candidates[0]);
+				}
+			}
+		}
+	});
 }
 
 function load_template_preview(frm, dialog) {
