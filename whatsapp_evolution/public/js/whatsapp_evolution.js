@@ -1,3 +1,4 @@
+// WhatsApp Evolution Dialogue - v2.2 (Manual Validation for Attachments)
 $(document).on("app_ready", () => {
 	frappe.router.on("change", () => {
 		const route = frappe.get_route();
@@ -81,7 +82,7 @@ function open_whatsapp_dialog(frm) {
 				label: __("Attachment"),
 				fieldname: "attach",
 				fieldtype: "Attach",
-				depends_on: "eval:doc.send_mode=='Template' || (doc.send_mode=='Custom' && doc.content_type!='text')"
+				depends_on: "eval:doc.send_mode=='Custom' && doc.content_type!='text' && !doc.attach_document_print"
 			},
 			{
 				label: __("Attach Document Print (PDF)"),
@@ -89,7 +90,24 @@ function open_whatsapp_dialog(frm) {
 				fieldtype: "Check",
 				default: 0,
 				change() {
+					const checked = dialog.get_value("attach_document_print");
+					// When PDF print is chosen, hide the manual attach field and make it non-required
 					toggle_attachment_field(dialog);
+					if (checked && !dialog.get_value("print_format")) {
+						frappe.call({
+							method: "frappe.client.get_value",
+							args: {
+								doctype: "DocType",
+								filters: { name: frm.doc.doctype },
+								fieldname: "default_print_format"
+							},
+							callback: function (r) {
+								if (r.message && r.message.default_print_format) {
+									dialog.set_value("print_format", r.message.default_print_format);
+								}
+							}
+						});
+					}
 				}
 			},
 			{
@@ -133,21 +151,46 @@ function open_whatsapp_dialog(frm) {
 				description: __("Use country code, e.g. 923001234567")
 			},
 			{
-				label: __("Add Timeline Comment"),
-				fieldname: "add_comment",
-				fieldtype: "Check",
-				default: 1
-			}
+				label: __("WhatsApp Account"),
+				fieldname: "whatsapp_account",
+				fieldtype: "Link",
+				options: "WhatsApp Account",
+				get_query: () => ({
+					filters: { status: "Active" }
+				})
+			},
 		],
 		primary_action_label: __("Send"),
 		primary_action(values) {
+			if (values.send_mode === "Custom" && values.content_type !== "text" && !values.attach && !values.attach_document_print) {
+				frappe.msgprint(__("Please attach a file or select 'Attach Document Print'"));
+				return;
+			}
 			send_whatsapp_message(frm, dialog, values);
 		}
 	});
 
 	autofill_mobile_from_doc(frm, dialog);
 	toggle_mode_fields(dialog);
+	set_default_whatsapp_account(dialog);
+
 	dialog.show();
+}
+
+function set_default_whatsapp_account(dialog) {
+	frappe.call({
+		method: "frappe.client.get_value",
+		args: {
+			doctype: "WhatsApp Account",
+			filters: { is_default_outgoing: 1, status: "Active" },
+			fieldname: "name"
+		},
+		callback(r) {
+			if (r.message && r.message.name) {
+				dialog.set_value("whatsapp_account", r.message.name);
+			}
+		}
+	});
 }
 
 function toggle_mode_fields(dialog) {
@@ -166,15 +209,13 @@ function toggle_mode_fields(dialog) {
 }
 
 function toggle_attachment_field(dialog) {
-	const mode = dialog.get_value("send_mode");
-	const type = dialog.get_value("content_type") || "text";
 	const attach_field = dialog.get_field("attach");
+
 	if (!attach_field) {
 		return;
 	}
-	const needs_media = mode === "Custom" && type !== "text";
-	const use_print = Number(dialog.get_value("attach_document_print") || 0) === 1;
-	attach_field.df.reqd = needs_media && !use_print ? 1 : 0;
+
+	// Just refresh to update visibility based on depends_on
 	attach_field.refresh();
 }
 
@@ -192,7 +233,8 @@ function send_whatsapp_message(frm, dialog, values) {
 	const args = {
 		to: values.mobile_no,
 		reference_doctype: frm.doc.doctype,
-		reference_name: frm.doc.name
+		reference_name: frm.doc.name,
+		whatsapp_account: values.whatsapp_account || ""
 	};
 
 	if (is_template) {
@@ -213,13 +255,6 @@ function send_whatsapp_message(frm, dialog, values) {
 		args.attach_document_print = values.attach_document_print ? 1 : 0;
 		args.print_format = values.print_format || "";
 		args.no_letterhead = values.no_letterhead ? 1 : 0;
-
-		if (args.content_type !== "text" && !args.attach && !args.attach_document_print) {
-			frappe.msgprint(
-				__("For media custom messages, select Attachment or enable Attach Document Print (PDF).")
-			);
-			return;
-		}
 	}
 
 	frappe.call({
@@ -227,9 +262,6 @@ function send_whatsapp_message(frm, dialog, values) {
 		args,
 		freeze: true,
 		callback: (r) => {
-			if (values.add_comment) {
-				add_timeline_comment(frm, values);
-			}
 			const queued = r && r.message && r.message.queued;
 			frappe.msgprint(
 				queued
@@ -262,33 +294,6 @@ function send_whatsapp_message(frm, dialog, values) {
 	});
 }
 
-function add_timeline_comment(frm, values) {
-	const is_template = values.send_mode === "Template";
-	const body = (is_template ? (values.template_body || values.template_raw) : values.custom_message) || "";
-	const attachment = values.attach || build_document_print_url(frm, values);
-	let comment_message = `To: ${values.mobile_no}\nWhatsApp Message Sent`;
-
-	if (body) {
-		comment_message += `\n\nMessage:\n${body}`;
-	}
-	if (attachment) {
-		comment_message += `\n\nAttachment: ${attachment}`;
-	}
-
-	frappe.call({
-		method: "frappe.desk.form.utils.add_comment",
-		args: {
-			reference_doctype: frm.doc.doctype,
-			reference_name: frm.doc.name,
-			content: comment_message,
-			comment_by: frappe.session.user_fullname,
-			comment_email: frappe.session.user
-		},
-		error: () => {
-			// Do not block/alert on timeline write failures; message sending is already queued.
-		}
-	});
-}
 
 function build_document_print_url(frm, values) {
 	if (!values.attach_document_print) {
@@ -305,46 +310,45 @@ function populate_mobile_from_contact(dialog) {
 		return;
 	}
 	frappe.call({
-		method: "frappe.client.get_value",
+		method: "whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_notification.whatsapp_notification.get_contact_whatsapp_numbers",
 		args: {
-			doctype: "Contact",
-			filters: { name: contact_name },
-			fieldname: ["mobile_no"]
+			contact_name: contact_name
 		},
 		callback(r) {
-			dialog.set_value("mobile_no", (r.message && r.message.mobile_no) || "");
+			const numbers = r.message || [];
+			if (numbers.length) {
+				dialog.set_value("mobile_no", numbers[0]);
+			}
 		}
 	});
 }
 
 function autofill_mobile_from_doc(frm, dialog) {
-	const candidates = [
-		frm.doc.mobile_no,
-		frm.doc.mobile,
-		frm.doc.phone,
-		frm.doc.contact_mobile,
-		frm.doc.whatsapp_no
-	].filter(Boolean);
-
-	if (candidates.length) {
-		dialog.set_value("mobile_no", candidates[0]);
-		return;
-	}
-
+	// For manual dialogue, we want to be helpful but strict.
+	// We'll call the backend to get all "WhatsApp" authorized numbers for this document.
 	frappe.call({
-		method: "whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_message.whatsapp_message.get_primary_whatsapp_number",
+		method: "whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_message.whatsapp_message.get_authorized_whatsapp_numbers",
 		args: {
 			reference_doctype: frm.doc.doctype,
 			reference_name: frm.doc.name
 		},
 		callback(r) {
-			const mobile = (r.message && r.message.mobile_no) || "";
-			const contact = (r.message && r.message.contact) || "";
-			if (contact) {
-				dialog.set_value("contact", contact);
-			}
-			if (mobile) {
-				dialog.set_value("mobile_no", mobile);
+			const numbers = r.message || [];
+			if (numbers.length) {
+				dialog.set_value("mobile_no", numbers[0]);
+			} else {
+				// Fallback to basic field pull
+				const candidates = [
+					frm.doc.mobile_no,
+					frm.doc.mobile,
+					frm.doc.phone,
+					frm.doc.contact_mobile,
+					frm.doc.whatsapp_no
+				].filter(Boolean);
+
+				if (candidates.length) {
+					dialog.set_value("mobile_no", candidates[0]);
+				}
 			}
 		}
 	});
@@ -355,8 +359,26 @@ function load_template_preview(frm, dialog) {
 	if (!template) {
 		dialog.set_value("template_body", "");
 		dialog.set_value("template_raw", "");
+		set_default_whatsapp_account(dialog);
 		return;
 	}
+
+	frappe.call({
+		method: "frappe.client.get_value",
+		args: {
+			doctype: "WhatsApp Templates",
+			filters: { name: template },
+			fieldname: ["whatsapp_account"]
+		},
+		callback(res) {
+			const msg = res.message || {};
+			if (msg.whatsapp_account) {
+				dialog.set_value("whatsapp_account", msg.whatsapp_account);
+			} else {
+				set_default_whatsapp_account(dialog);
+			}
+		}
+	});
 
 	frappe.call({
 		method: "whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_message.whatsapp_message.get_template_preview",

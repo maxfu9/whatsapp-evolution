@@ -69,23 +69,6 @@ class EvolutionProvider(BaseProvider):
         urls.extend([self._build_url("/message/sendMedia"), self._build_url("/messages")])
         return [u for i, u in enumerate(urls) if u and u not in urls[:i]]
 
-    def _check_number_candidate_urls(self):
-        urls = []
-        if self.instance:
-            urls.extend(
-                [
-                    self._build_url(f"/chat/whatsappNumbers/{self.instance}"),
-                    self._build_url(f"/chat/checkNumber/{self.instance}"),
-                ]
-            )
-        urls.extend(
-            [
-                self._build_url("/chat/whatsappNumbers"),
-                self._build_url("/chat/checkNumber"),
-            ]
-        )
-        return [u for i, u in enumerate(urls) if u and u not in urls[:i]]
-
     def _extract_session_error(self, response):
         """Return Evolution session error text if present in response body."""
         if response is None:
@@ -104,64 +87,7 @@ class EvolutionProvider(BaseProvider):
             return "SessionError: No sessions"
         return ""
 
-    def _extract_number_not_found(self, response):
-        """Return True when Evolution confirms recipient does not exist on WhatsApp."""
-        if response is None:
-            return False
-        raw = (response.text or "").strip().lower()
-        if '"exists":false' in raw:
-            return True
-        try:
-            payload = response.json()
-        except Exception:
-            return False
-        text = json.dumps(payload, ensure_ascii=False).lower()
-        return '"exists": false' in text or '"exists":false' in text
-
-    def check_number_exists(self, to_number):
-        """Best-effort recipient existence check. Returns True/False/None."""
-        candidate_payloads = []
-        if self.instance:
-            candidate_payloads.append({"number": to_number, "instance": self.instance})
-            candidate_payloads.append({"numbers": [to_number], "instance": self.instance})
-        candidate_payloads.append({"number": to_number})
-        candidate_payloads.append({"numbers": [to_number]})
-
-        for url in self._check_number_candidate_urls():
-            for payload in candidate_payloads:
-                try:
-                    response = requests.post(url, json=payload, headers=self._headers(), timeout=15)
-                    if response.status_code == 404:
-                        continue
-                    response.raise_for_status()
-                    body = {}
-                    try:
-                        body = response.json() or {}
-                    except Exception:
-                        body = {}
-
-                    text = json.dumps(body, ensure_ascii=False).lower()
-                    if '"exists": false' in text or '"exists":false' in text:
-                        return False
-                    if '"exists": true' in text or '"exists":true' in text:
-                        return True
-                except Exception:
-                    continue
-        return None
-
     def send_message(self, to_number, message, **kwargs):
-        strict_check = bool(self.settings.get("strict_recipient_check"))
-        if strict_check:
-            exists = self.check_number_exists(to_number)
-            if exists is False:
-                raise frappe.ValidationError(
-                    f"Recipient number {to_number} is not registered on WhatsApp."
-                )
-            if exists is None:
-                raise frappe.ValidationError(
-                    "Recipient pre-check failed. Could not verify number on Evolution API."
-                )
-
         if not self._acquire_dedup("text", to_number, message or "", ttl=45):
             return {"id": "dedup-skip"}
 
@@ -188,10 +114,6 @@ class EvolutionProvider(BaseProvider):
                     session_error = self._extract_session_error(e.response)
                     if session_error:
                         seen_session_error = session_error
-                    if self._extract_number_not_found(e.response):
-                        raise frappe.ValidationError(
-                            f"Recipient number {to_number} is not registered on WhatsApp."
-                        )
                     status_code = e.response.status_code if e.response is not None else "?"
                     body = ""
                     if e.response is not None:
@@ -208,18 +130,6 @@ class EvolutionProvider(BaseProvider):
         raise frappe.ValidationError(f"Evolution text send failed. Tried: {', '.join(errors)}")
 
     def send_media(self, to_number, media_url, media_type="document", caption="", media_bytes=None, filename=None):
-        strict_check = bool(self.settings.get("strict_recipient_check"))
-        if strict_check:
-            exists = self.check_number_exists(to_number)
-            if exists is False:
-                raise frappe.ValidationError(
-                    f"Recipient number {to_number} is not registered on WhatsApp."
-                )
-            if exists is None:
-                raise frappe.ValidationError(
-                    "Recipient pre-check failed. Could not verify number on Evolution API."
-                )
-
         if media_bytes:
             # Prefer content hash so signed URLs for same file don't bypass dedup.
             dedup_content = f"{media_type}|{caption or ''}|{hashlib.sha1(media_bytes).hexdigest()}"
@@ -322,10 +232,6 @@ class EvolutionProvider(BaseProvider):
                     session_error = self._extract_session_error(e.response)
                     if session_error:
                         seen_session_error = session_error
-                    if self._extract_number_not_found(e.response):
-                        raise frappe.ValidationError(
-                            f"Recipient number {to_number} is not registered on WhatsApp."
-                        )
                     status_code = e.response.status_code if e.response is not None else "?"
                     has_file_name = bool(payload.get("fileName") or (payload.get("mediaMessage") or {}).get("fileName"))
                     mode = "base64" if has_file_name else "url"
@@ -348,14 +254,51 @@ class EvolutionProvider(BaseProvider):
         )
 
     def parse_incoming(self, data):
-        if not all(k in data for k in ("from", "text", "id", "timestamp")):
-            raise ValueError("Invalid incoming payload")
-        return {
-            "from": data["from"],
-            "body": data["text"],
-            "message_id": data["id"],
-            "timestamp": data["timestamp"],
-        }
+        event = data.get("event")
+        payload = data.get("data") or {}
+
+        if event == "messages.upsert":
+            message = payload.get("message") or {}
+            key = payload.get("key") or {}
+            
+            # Extract number
+            sender = key.get("remoteJid") or ""
+            if "@" in sender:
+                sender = sender.split("@")[0]
+            
+            # Extract text
+            text = (
+                message.get("conversation") 
+                or (message.get("extendedTextMessage") or {}).get("text")
+                or (message.get("imageMessage") or {}).get("caption")
+                or (message.get("videoMessage") or {}).get("caption")
+                or ""
+            )
+            
+            return {
+                "event": event,
+                "from": sender,
+                "body": text,
+                "message_id": key.get("id"),
+                "timestamp": payload.get("messageTimestamp"),
+                "is_from_me": key.get("fromMe", False)
+            }
+            
+        elif event == "messages.update":
+            # Status update (ACK)
+            key = payload.get("key") or {}
+            update = payload.get("update") or {}
+            status = update.get("status")
+            
+            return {
+                "event": event,
+                "message_id": key.get("id"),
+                "status": status,
+                "to": (key.get("remoteJid") or "").split("@")[0],
+                "is_from_me": key.get("fromMe", True)
+            }
+
+        return {"event": event}
 
     def test_connection(self):
         """Check API reachability and instance session status."""
@@ -406,12 +349,40 @@ def handle_webhook():
     data = frappe.local.request.get_json(silent=True) or {}
     if not data:
         return "No payload"
-    provider = EvolutionProvider(frappe.get_single("WhatsApp Settings").as_dict())
-    try:
-        msg = provider.parse_incoming(data)
-    except ValueError:
-        return "Invalid payload"
-    from whatsapp_evolution.incoming import handle_incoming_message
+    
+    event_type = data.get("event")
+    if not event_type:
+        return "No event"
 
-    handle_incoming_message(msg)
+    provider = EvolutionProvider(frappe.get_single("WhatsApp Settings").as_dict())
+    msg = provider.parse_incoming(data)
+    
+    if event_type == "messages.upsert":
+        if msg.get("is_from_me"):
+            # Update outgoing message status if we find it by ID
+            if msg.get("message_id"):
+                frappe.db.set_value("WhatsApp Message", {"message_id": msg.get("message_id")}, "status", "Sent")
+            return "OK"
+            
+        from whatsapp_evolution.incoming import handle_incoming_message
+        handle_incoming_message(msg)
+        
+    elif event_type == "messages.update":
+        status_code = msg.get("status")
+        message_id = msg.get("message_id")
+        
+        if message_id and status_code is not None:
+            # Map Evolution ACK levels
+            # 2 = Delivered (Two Ticks)
+            # 3 = Read (Two Blue Ticks)
+            status_map = {
+                1: "Sent",
+                2: "Delivered",
+                3: "Read",
+                4: "Played"
+            }
+            status_text = status_map.get(status_code)
+            if status_text:
+                frappe.db.set_value("WhatsApp Message", {"message_id": message_id}, "status", status_text)
+
     return "OK"

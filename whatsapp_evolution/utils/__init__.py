@@ -18,10 +18,9 @@ def run_server_script_for_doc_event(doc, event):
     if frappe.flags.in_uninstall:
         return
 
-    doctype_notifications = get_notifications_map().get(doc.doctype, {})
-    mapped_event = EVENT_MAP[event]
-    # Backward compatibility: older rows may store raw event keys.
-    notification = doctype_notifications.get(mapped_event) or doctype_notifications.get(event)
+    notification = get_notifications_map().get(
+        doc.doctype, {}
+    ).get(EVENT_MAP[event], None)
 
     if notification:
         # run all scripts for this doctype + event
@@ -234,7 +233,6 @@ def get_evolution_settings(whatsapp_account=None):
         "evolution_api_token": token,
         "evolution_instance": instance,
         "evolution_send_endpoint": send_endpoint,
-        "strict_recipient_check": frappe.utils.cint(account_doc.get("strict_recipient_check")) if account_doc else 0,
         "whatsapp_account": account_doc.name if account_doc else None,
     }
 
@@ -251,26 +249,11 @@ def format_number(number):
     """Format number."""
     if not number:
         return number
-    text = str(number).strip()
-    if not text:
-        return ""
 
-    # Keep only dialable chars, then normalize leading markers.
-    text = "".join(ch for ch in text if ch.isdigit() or ch == "+")
-    if text.startswith("+"):
-        text = text[1:]
-    if text.startswith("0092"):
-        text = "92" + text[4:]
+    if number.startswith("+"):
+        number = number[1 : len(number)]
 
-    # Pakistan local mobile to international.
-    if len(text) == 11 and text.startswith("03"):
-        return "92" + text[1:]
-
-    # Already in international PK format.
-    if text.startswith("92"):
-        return text
-
-    return text
+    return number
 
 
 def cleanup_legacy_rq_jobs(needle="frappe_whatsapp"):

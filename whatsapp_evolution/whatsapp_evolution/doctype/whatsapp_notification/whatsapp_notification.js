@@ -45,41 +45,72 @@ frappe.notification = {
 			// set value changed options
 			frm.set_df_property("value_changed", "options", [""].concat(options));
 			frm.set_df_property("set_property_after_alert", "options", [""].concat(options));
+
+			// filter receiver fields to only show User Links or Phone Options
+			let receiver_fields = $.map(fields, function (d) {
+				if (d.fieldtype == "Table") {
+					let child_options = frappe.get_doc("DocType", d.options).fields;
+					return $.map(child_options, function (df) {
+						return (df.options == "User" && df.fieldtype == "Link") || df.options == "Phone" || df.options == "Email"
+							? get_select_options(df, d.fieldname)
+							: null;
+					});
+				} else {
+					return (d.options == "User" && d.fieldtype == "Link") || d.options == "Phone" || d.options == "Email"
+						? get_select_options(d)
+						: null;
+				}
+			});
+
+			// set receiver by document field options
+			frappe.meta.get_docfield(
+				"Notification Recipient",
+				"receiver_by_document_field",
+				frm.doc.name
+			).options = [""].concat(["owner"]).concat(receiver_fields);
 		});
 	},
 	setup_alerts_button: function (frm) {
 		// body...
 		frm.add_custom_button(__('Get Alerts for Today'), function () {
-            frappe.call({
-                method: 'whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_notification.whatsapp_notification.call_trigger_notifications',
-                args: {
-                    method: 'daily' 
-                },
-                callback: function (response) {
-                    if (response.message && response.message.length > 0) {
-                    } else {
-                        frappe.msgprint(__('No alerts for today'));
-                    }
-                },
-                error: function (error) {
-                    frappe.msgprint(__('Failed to trigger notifications'));
-                }
-            });
-        });
+			frappe.call({
+				method: 'whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_notification.whatsapp_notification.call_trigger_notifications',
+				args: {
+					method: 'daily'
+				},
+				callback: function (response) {
+					if (response.message && response.message.length > 0) {
+					} else {
+						frappe.msgprint(__('No alerts for today'));
+					}
+				},
+				error: function (error) {
+					frappe.msgprint(__('Failed to trigger notifications'));
+				}
+			});
+		});
 	}
 };
 
 
 frappe.ui.form.on('WhatsApp Notification', {
-	refresh: function(frm) {
+	refresh: function (frm) {
 		frm.trigger("load_template")
 		frappe.notification.setup_fieldname_select(frm);
 		frappe.notification.setup_alerts_button(frm);
+
+		frm.set_query("print_format", function () {
+			return {
+				filters: {
+					doc_type: frm.doc.reference_doctype
+				}
+			};
+		});
 	},
-	template: function(frm){
+	template: function (frm) {
 		frm.trigger("load_template")
 	},
-	load_template: function(frm){
+	load_template: function (frm) {
 		frappe.db.get_value(
 			"WhatsApp Templates",
 			frm.doc.template,
@@ -88,13 +119,14 @@ frappe.ui.form.on('WhatsApp Notification', {
 				if (r && r.template) {
 					frm.set_value('header_type', r.header_type)
 					frm.refresh_field("header_type")
-					if (['DOCUMENT', "IMAGE"].includes(r.header_type)){
+					if (['DOCUMENT', "IMAGE"].includes(r.header_type)) {
 						frm.toggle_display("custom_attachment", true);
 						frm.toggle_display("attach_document_print", true);
-						if (!frm.doc.custom_attachment){
-							frm.set_value("attach_document_print", 1)
+						if (!frm.doc.custom_attachment) {
+							frm.set_value("attach_document_print", 1);
 						}
-					}else{
+						frm.trigger("attach_document_print");
+					} else {
 						frm.toggle_display("custom_attachment", false);
 						frm.toggle_display("attach_document_print", false);
 						frm.set_value("attach_document_print", 0)
@@ -109,25 +141,47 @@ frappe.ui.form.on('WhatsApp Notification', {
 			}
 		)
 	},
-	custom_attachment: function(frm){
-		if(frm.doc.custom_attachment == 1 &&  ['DOCUMENT', "IMAGE"].includes(frm.doc.header_type)){
+	custom_attachment: function (frm) {
+		if (frm.doc.custom_attachment == 1 && ['DOCUMENT', "IMAGE"].includes(frm.doc.header_type)) {
 			frm.set_df_property('file_name', 'reqd', frm.doc.custom_attachment)
-		}else{
+		} else {
 			frm.set_df_property('file_name', 'reqd', 0)
 		}
 
 		// frm.toggle_display("attach_document_print", !frm.doc.custom_attachment);
-		if(frm.doc.header_type){
+		if (frm.doc.header_type) {
 			frm.set_value("attach_document_print", !frm.doc.custom_attachment)
 		}
 	},
-	attach_document_print: function(frm){
+	attach_document_print: function (frm) {
 		// frm.toggle_display("custom_attachment", !frm.doc.attach_document_print);
-		if(['DOCUMENT', "IMAGE"].includes(frm.doc.header_type)){
+		if (['DOCUMENT', "IMAGE"].includes(frm.doc.header_type)) {
 			frm.set_value("custom_attachment", !frm.doc.attach_document_print)
+		}
+		if (frm.doc.attach_document_print && !frm.doc.print_format && frm.doc.reference_doctype) {
+			frappe.call({
+				method: "frappe.client.get_value",
+				args: {
+					doctype: "DocType",
+					filters: { name: frm.doc.reference_doctype },
+					fieldname: "default_print_format"
+				},
+				callback: function (r) {
+					if (r.message && r.message.default_print_format) {
+						frm.set_value("print_format", r.message.default_print_format);
+					}
+				}
+			});
 		}
 	},
 	reference_doctype: function (frm) {
 		frappe.notification.setup_fieldname_select(frm);
+		frm.set_query("print_format", function () {
+			return {
+				filters: {
+					doc_type: frm.doc.reference_doctype
+				}
+			};
+		});
 	},
 });

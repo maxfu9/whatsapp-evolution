@@ -3,6 +3,7 @@
 import json
 import re
 from urllib.parse import urlparse, parse_qs
+import requests
 import frappe
 from frappe import _, throw
 from frappe.model.document import Document
@@ -61,17 +62,80 @@ def _resolve_outgoing_account_name(preferred_account=None):
     return fallback.name if fallback else None
 
 
-def _resolve_print_format(doctype, explicit_print_format=None):
-    fmt = (explicit_print_format or "").strip()
-    if fmt:
-        return fmt
-    try:
-        meta = frappe.get_meta(doctype)
-        if meta and meta.default_print_format:
-            return meta.default_print_format
-    except Exception:
-        pass
-    return "Standard"
+def _resolve_evolution_account(preferred_account=None, template_account=None):
+    candidates = []
+    for candidate in (preferred_account, template_account):
+        if candidate and candidate not in candidates and frappe.db.exists("WhatsApp Account", candidate):
+            candidates.append(candidate)
+
+    outgoing = get_whatsapp_account(account_type="outgoing")
+    if outgoing and outgoing.name not in candidates:
+        candidates.append(outgoing.name)
+
+    fallback = get_whatsapp_account()
+    if fallback and fallback.name not in candidates:
+        candidates.append(fallback.name)
+
+    for account_name in candidates:
+        try:
+            if is_evolution_enabled(whatsapp_account=account_name):
+                return account_name
+        except Exception:
+            continue
+
+    # Prefer accounts that have recently sent successfully.
+    recent_success_accounts = frappe.get_all(
+        "WhatsApp Message",
+        filters={"type": "Outgoing", "status": "Success"},
+        fields=["whatsapp_account"],
+        order_by="modified desc",
+        limit_page_length=50,
+    )
+    for row in recent_success_accounts:
+        account_name = (row.get("whatsapp_account") or "").strip()
+        if not account_name or account_name in candidates:
+            continue
+        if not frappe.db.exists("WhatsApp Account", account_name):
+            continue
+        try:
+            if is_evolution_enabled(whatsapp_account=account_name):
+                return account_name
+        except Exception:
+            continue
+
+    # Last-resort fallback: pick any active account that is Evolution-enabled.
+    active_accounts = frappe.get_all("WhatsApp Account", filters={"status": "Active"}, pluck="name")
+    for account_name in active_accounts:
+        if account_name in candidates:
+            continue
+        try:
+            if is_evolution_enabled(whatsapp_account=account_name):
+                return account_name
+        except Exception:
+            continue
+
+    # Return first resolvable account for clearer error messages downstream.
+    return candidates[0] if candidates else None
+
+
+def _resolve_print_format(doctype_name, selected_print_format=None):
+    selected = (selected_print_format or "").strip()
+    if selected:
+        return selected
+
+    default_format = None
+    if doctype_name:
+        default_format = frappe.db.get_value("DocType", doctype_name, "default_print_format")
+        if not default_format:
+            default_format = frappe.db.get_value(
+                "Property Setter",
+                filters={
+                    "doc_type": doctype_name,
+                    "property": "default_print_format",
+                },
+                fieldname="value",
+            )
+    return default_format or "Standard"
 
 
 def _get_ledger_balance_value(doc):
@@ -191,6 +255,17 @@ def _normalized_attachment_identity(attach):
         return f"download_pdf:{doctype}:{name}:{fmt}:{letterhead}"
     except Exception:
         return attach
+
+
+def _extract_print_format_from_attach(attach):
+    if not attach or "download_pdf" not in str(attach):
+        return None
+    try:
+        parsed = urlparse(str(attach))
+        qs = parse_qs(parsed.query or "")
+        return ((qs.get("format") or [None])[0] or "").strip() or None
+    except Exception:
+        return None
 
 
 def _outgoing_dedup_key(doc):
@@ -317,8 +392,15 @@ class WhatsAppMessage(Document):
     def validate(self):
         self.set_whatsapp_account()
 
+    def after_insert(self):
+        # We only create communication for non-queued messages
+        # Queued messages create communication after they are actually sent
+        if self.status != "Queued":
+            self.create_communication()
+
     def on_update(self):
         self.update_profile_name()
+        self.update_communication()
 
     def update_profile_name(self):
         number = self.get("from")
@@ -624,22 +706,43 @@ class WhatsAppMessage(Document):
                 and "download_pdf" in (self.attach or "")
             ):
                 try:
-                    requested_format = None
-                    try:
-                        parsed = parse_qs(urlparse(self.attach or "").query)
-                        requested_format = (parsed.get("format") or [None])[0]
-                    except Exception:
-                        requested_format = None
+                    resolved_print_format = (
+                        _extract_print_format_from_attach(self.attach)
+                        or _resolve_print_format(self.reference_doctype, None)
+                    )
                     print_data = frappe.attach_print(
                         self.reference_doctype,
                         self.reference_name,
-                        print_format=_resolve_print_format(self.reference_doctype, requested_format),
+                        print_format=resolved_print_format,
                     )
                     media_bytes = print_data.get("fcontent")
                     media_filename = print_data.get("fname")
                 except Exception:
                     media_bytes = None
                     media_filename = None
+                    # If attach_print fails, try fetching the signed PDF internally
+                    # so Evolution doesn't need to resolve local bench hostnames.
+                    try:
+                        parsed = urlparse(file_url or "")
+                        urls_to_try = [file_url] if file_url else []
+                        if parsed.hostname and parsed.hostname.endswith(".local"):
+                            internal = parsed._replace(netloc="127.0.0.1:8000")
+                            urls_to_try.append(internal.geturl())
+
+                        for candidate in urls_to_try:
+                            resp = requests.get(candidate, timeout=20)
+                            resp.raise_for_status()
+                            if resp.content:
+                                media_bytes = resp.content
+                                media_filename = f"{self.reference_name or 'document'}.pdf"
+                                break
+                    except Exception:
+                        media_bytes = None
+                        media_filename = None
+
+            # Prefer byte upload when available to avoid Evolution DNS issues on site1.local.
+            if media_bytes:
+                file_url = ""
 
             try:
                 response = provider.send_media(
@@ -651,7 +754,8 @@ class WhatsAppMessage(Document):
                     filename=media_filename,
                 )
             except Exception as e:
-                if not self._allow_attachment_link_fallback():
+                is_dns_resolution_error = "enotfound" in str(e).lower()
+                if not self._allow_attachment_link_fallback() and not is_dns_resolution_error:
                     frappe.throw(
                         _("Attachment send failed in File Only mode: {0}").format(str(e))
                     )
@@ -668,7 +772,83 @@ class WhatsAppMessage(Document):
 
     def format_number(self, number):
         """Format number."""
-        return format_number(number)
+        if number.startswith("+"):
+            number = number[1 : len(number)]
+
+        return number
+
+    def create_communication(self):
+        if not self.reference_doctype or not self.reference_name:
+            return
+
+        # Don't create Communication for Queued placeholders — no real message yet
+        if self.status in ("Queued", "Started", "Skipped"):
+            return
+
+        # Double-check for duplicate communication records
+        existing_comm = frappe.db.get_value("Communication", {"link_doctype": "WhatsApp Message", "link_name": self.name})
+        if existing_comm:
+            frappe.logger().debug(f"WhatsApp Evolution: Communication already exists for {self.name}: {existing_comm}")
+            return
+            
+        frappe.logger().debug(f"WhatsApp Evolution: Creating communication for {self.name} (Status: {self.status})")
+
+        content = self.message or ""
+        if self.attach:
+            # Add attachment link to content for timeline visibility
+            link = self.attach
+            if not link.startswith("http"):
+                link = frappe.utils.get_url(self.attach)
+            content += f"<br><br><a href='{link}' target='_blank'><b>{_('View Attachment')}</b></a>"
+
+        subject = _("WhatsApp Outgoing") if self.type == "Outgoing" else _("WhatsApp Incoming")
+        if self.template:
+            subject += f" ({self.template})"
+
+        sender_internal = (self.whatsapp_account if self.type == "Outgoing" else self.profile_name or self.get("from")) or "whatsapp"
+        # Ensure sender passes Frappe's Email validation (Data with options="Email")
+        # We use a dummy @whatsapp.local domain to satisfy the regex
+        sender_email = f"{sender_internal}@whatsapp.local" if "@" not in sender_internal else sender_internal
+
+        recipient_internal = (self.to if self.type == "Outgoing" else self.whatsapp_account) or "whatsapp"
+        recipient_email = f"{recipient_internal}@whatsapp.local" if "@" not in recipient_internal else recipient_internal
+
+        comm = frappe.get_doc({
+            "doctype": "Communication",
+            "communication_type": "Communication",
+            "communication_medium": "WhatsApp",
+            "subject": subject,
+            "content": content,
+            "sender": sender_email,
+            "sender_full_name": sender_internal,
+            "recipients": recipient_email,
+            "reference_doctype": self.reference_doctype,
+            "reference_name": self.reference_name,
+            "link_doctype": "WhatsApp Message",
+            "link_name": self.name,
+            "sent_or_received": "Sent" if self.type == "Outgoing" else "Received",
+        })
+        comm.flags.ignore_validate = True
+        comm.insert(ignore_permissions=True)
+
+    def update_communication(self):
+        if not self.has_value_changed("status") and not self.has_value_changed("message_id"):
+            return
+            
+        comm_name = frappe.db.get_value("Communication", {"link_doctype": "WhatsApp Message", "link_name": self.name})
+        if comm_name:
+            status_map = {
+                "Sent": "Sent",
+                "Delivered": "Delivered",
+                "Read": "Read",
+                "Failed": "Error",
+                "Queued": "Scheduled"
+            }
+            comm = frappe.get_doc("Communication", comm_name)
+            comm.delivery_status = status_map.get(self.status, "Sent")
+            comm.message_id = self.message_id
+            comm.flags.ignore_validate = True
+            comm.save(ignore_permissions=True)
 
     @frappe.whitelist()
     def send_read_receipt(self):
@@ -693,7 +873,10 @@ def send_template(
     whatsapp_account=None,
 ):
     template_account = frappe.db.get_value("WhatsApp Templates", template, "whatsapp_account") if template else None
-    selected_account = _resolve_outgoing_account_name(whatsapp_account or template_account)
+    selected_account = _resolve_evolution_account(
+        preferred_account=template_account,
+        template_account=whatsapp_account,
+    )
     queue_name = _create_queue_placeholder(
         to=to,
         reference_doctype=reference_doctype,
@@ -744,7 +927,10 @@ def send_template_now(
     try:
         sent_doc = None
         template_account = frappe.db.get_value("WhatsApp Templates", template, "whatsapp_account") if template else None
-        selected_account = _resolve_outgoing_account_name(whatsapp_account or template_account)
+        selected_account = _resolve_evolution_account(
+            preferred_account=template_account,
+            template_account=whatsapp_account,
+        )
         if not is_evolution_enabled(whatsapp_account=selected_account):
             frappe.throw(
                 _("Evolution API is required. Configure Evolution on WhatsApp Account / WhatsApp Settings.")
@@ -779,8 +965,9 @@ def send_template_now(
             _update_queue_status(queued_message_name, "Skipped", details="Duplicate prevented")
             return
 
-        doc = frappe.get_doc(
-            {
+        if not queued_message_name:
+            # Fallback for old enqueued tasks without a reference name
+            doc = frappe.get_doc({
                 "doctype": "WhatsApp Message",
                 "to": to,
                 "type": "Outgoing",
@@ -791,10 +978,29 @@ def send_template_now(
                 "message": rendered_text,
                 "attach": send_attach or "",
                 "whatsapp_account": selected_account or "",
-            }
-        )
-        doc.save()
-        sent_doc = doc
+            })
+            doc.insert(ignore_permissions=True)
+            sent_doc = doc
+        else:
+            # Update the existing queued document
+            sent_doc = frappe.get_doc("WhatsApp Message", queued_message_name)
+            sent_doc.update({
+                # Evolution mode sends rendered text/media, not WA template API payloads.
+                "message_type": "Manual",
+                "content_type": "document" if send_attach else "text",
+                "message": rendered_text,
+                "attach": send_attach or "",
+                "status": "Started",
+                "whatsapp_account": selected_account or "",
+            })
+            # Queue placeholders are pre-created with a synthetic message_id.
+            # Reset it and invoke send flow explicitly for existing docs.
+            sent_doc.message_id = ""
+            sent_doc.before_insert()
+            sent_doc.db_update()
+        
+        # Create timeline Communication after confirmed send
+        sent_doc.create_communication()
         _update_queue_status(
             queued_message_name,
             "Success",
@@ -803,6 +1009,10 @@ def send_template_now(
         )
     except Exception as e:
         _update_queue_status(queued_message_name, "Failed", details=str(e))
+        frappe.db.commit()
+        if queued_message_name:
+            frappe.log_error(frappe.get_traceback(), "WhatsApp Template Send Failed")
+            return {"queued": False, "status": "Failed", "error": str(e)}
         raise e
 
 
@@ -819,9 +1029,7 @@ def send_custom(
     no_letterhead=0,
     whatsapp_account=None,
 ):
-    # Custom messages must always use the default outgoing account.
-    # Ignore any explicit account passed from client/background kwargs.
-    selected_account = _resolve_outgoing_account_name()
+    selected_account = _resolve_evolution_account(preferred_account=whatsapp_account)
     queue_name = _create_queue_placeholder(
         to=to,
         reference_doctype=reference_doctype,
@@ -869,6 +1077,7 @@ def send_custom_now(
 ):
     _update_queue_status(queued_message_name, "Started")
     try:
+        actual_content_type = content_type or "text"
         if not attach and frappe.utils.cint(attach_document_print):
             key = frappe.get_doc(reference_doctype, reference_name).get_document_share_key()
             fmt = _resolve_print_format(reference_doctype, print_format)
@@ -876,12 +1085,13 @@ def send_custom_now(
                 f"{frappe.utils.get_url()}/api/method/frappe.utils.print_format.download_pdf"
                 f"?doctype={reference_doctype}&name={reference_name}&format={fmt}&no_letterhead={frappe.utils.cint(no_letterhead)}&key={key}"
             )
+            actual_content_type = "document"
 
         if _recent_duplicate_exists(
             reference_doctype=reference_doctype,
             reference_name=reference_name,
             to_number=to,
-            content_type=content_type or "text",
+            content_type=actual_content_type,
             message=message or "",
             attach=attach or "",
             template=None,
@@ -890,32 +1100,57 @@ def send_custom_now(
             _update_queue_status(queued_message_name, "Skipped", details="Duplicate prevented")
             return
 
-        # Custom messages must always use the default outgoing account.
-        # Ignore any explicit account passed from queued kwargs.
-        selected_account = _resolve_outgoing_account_name()
-        doc = frappe.get_doc(
-            {
+        selected_account = _resolve_evolution_account(preferred_account=whatsapp_account)
+
+        if not queued_message_name:
+            # Fallback for old enqueued tasks
+            doc = frappe.get_doc({
                 "doctype": "WhatsApp Message",
                 "to": to,
                 "type": "Outgoing",
                 "message_type": "Manual",
                 "reference_doctype": reference_doctype,
                 "reference_name": reference_name,
-                "content_type": content_type or "text",
+                "content_type": actual_content_type,
                 "message": message or "",
                 "attach": attach or "",
                 "whatsapp_account": selected_account or "",
-            }
-        )
-        doc.save()
+            })
+            doc.insert(ignore_permissions=True)
+            sent_doc = doc
+        else:
+            # Update the existing queued document
+            sent_doc = frappe.get_doc("WhatsApp Message", queued_message_name)
+            sent_doc.update({
+                "content_type": actual_content_type,
+                "message": message or "",
+                "attach": attach or "",
+                "status": "Started",
+                "whatsapp_account": selected_account or "",
+                "reference_doctype": reference_doctype,
+                "reference_name": reference_name
+            })
+            # Queue placeholders are pre-created with a synthetic message_id.
+            # Reset it and invoke send flow explicitly for existing docs.
+            sent_doc.message_id = ""
+            sent_doc.before_insert()
+            sent_doc.db_update()
+
+        # Create Communication now that send is confirmed
+        sent_doc.create_communication()
+        
         _update_queue_status(
             queued_message_name,
             "Success",
-            message_id=getattr(doc, "message_id", None),
-            details=getattr(doc, "message", None),
+            message_id=getattr(sent_doc, "message_id", None),
+            details=getattr(sent_doc, "message", None),
         )
     except Exception as e:
         _update_queue_status(queued_message_name, "Failed", details=str(e))
+        frappe.db.commit()
+        if queued_message_name:
+            frappe.log_error(frappe.get_traceback(), "WhatsApp Custom Send Failed")
+            return {"queued": False, "status": "Failed", "error": str(e)}
         raise e
 
 
@@ -965,10 +1200,6 @@ def get_linked_contacts_query(doctype, txt, searchfield, start, page_len, filter
             value = ref_doc.get(field)
             if value:
                 links.add((field.title(), value))
-        party_type = ref_doc.get("party_type")
-        party = ref_doc.get("party")
-        if party_type and party:
-            links.add((party_type, party))
     except Exception:
         pass
 
@@ -986,6 +1217,13 @@ def get_linked_contacts_query(doctype, txt, searchfield, start, page_len, filter
     if not conditions:
         return []
 
+    # Get WhatsApp tick fields dynamically
+    from whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_notification.whatsapp_notification import _get_tick_fields
+    tick_fields = _get_tick_fields(purpose="whatsapp")
+    if not tick_fields:
+        return []
+    tick_condition = "and (" + " or ".join([f"ifnull(cp.{tf}, 0) = 1" for tf in tick_fields]) + ")"
+
     searchfield = sanitize_searchfield(searchfield)
     return frappe.db.sql(
         f"""
@@ -995,7 +1233,10 @@ def get_linked_contacts_query(doctype, txt, searchfield, start, page_len, filter
         from `tabContact` c
         inner join `tabDynamic Link` dl
             on dl.parent = c.name and dl.parenttype = 'Contact'
+        inner join `tabContact Phone` cp
+            on cp.parent = c.name
         where ({' or '.join(conditions)})
+            {tick_condition}
             and (
                 c.name like %(txt)s
                 or ifnull(c.first_name, '') like %(txt)s
@@ -1010,78 +1251,20 @@ def get_linked_contacts_query(doctype, txt, searchfield, start, page_len, filter
         """,
         values,
     )
-
-
 @frappe.whitelist()
-def get_primary_whatsapp_number(reference_doctype, reference_name):
-    if not reference_doctype or not reference_name:
-        return {"mobile_no": ""}
-
-    if not frappe.db.exists(reference_doctype, reference_name):
-        return {"mobile_no": ""}
-
-    doc = frappe.get_doc(reference_doctype, reference_name)
-    candidates = [
-        (doc.get("mobile_no"), None),
-        (doc.get("mobile"), None),
-        (doc.get("phone"), None),
-        (doc.get("contact_mobile"), None),
-        (doc.get("whatsapp_no"), None),
-    ]
-
-    contact_name = doc.get("contact_person")
-    if contact_name and frappe.db.exists("Contact", contact_name):
-        row = frappe.db.get_value("Contact", contact_name, ["mobile_no", "phone"], as_dict=True)
-        if row:
-            candidates.extend(
-                [
-                    (row.get("mobile_no"), contact_name),
-                    (row.get("phone"), contact_name),
-                ]
-            )
-
-    party_type = doc.get("party_type")
-    party = doc.get("party")
-    if party_type and party:
-        contact_names = frappe.get_all(
-            "Dynamic Link",
-            filters={
-                "link_doctype": party_type,
-                "link_name": party,
-                "parenttype": "Contact",
-            },
-            pluck="parent",
-        )
-        if contact_names:
-            for row in frappe.get_all(
-                "Contact",
-                filters={"name": ["in", contact_names]},
-                fields=["name", "mobile_no", "phone", "is_primary_contact"],
-                order_by="is_primary_contact desc, modified desc",
-                limit=5,
-            ):
-                contact_ref = row.get("name")
-                candidates.extend(
-                    [
-                        (row.get("mobile_no"), contact_ref),
-                        (row.get("phone"), contact_ref),
-                    ]
-                )
-
-    employee_name = doc.get("employee") or doc.get("employee_name")
-    if employee_name and frappe.db.exists("DocType", "Employee") and frappe.db.exists("Employee", employee_name):
-        cell_number = frappe.db.get_value("Employee", employee_name, "cell_number")
-        candidates.append((cell_number, None))
-
-    if party_type == "Employee" and party and frappe.db.exists("DocType", "Employee") and frappe.db.exists("Employee", party):
-        party_cell_number = frappe.db.get_value("Employee", party, "cell_number")
-        candidates.append((party_cell_number, None))
-
-    for number, selected_contact in candidates:
-        if not number:
-            continue
-        normalized = format_number(str(number).strip())
-        if normalized:
-            return {"mobile_no": normalized, "contact": selected_contact or ""}
-
-    return {"mobile_no": "", "contact": ""}
+def get_authorized_whatsapp_numbers(reference_doctype, reference_name):
+    from whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_notification.whatsapp_notification import (
+        _get_dynamic_link_contact_numbers,
+        _get_contact_numbers,
+    )
+    
+    # 1. Direct Dynamic Links (strict)
+    numbers = _get_dynamic_link_contact_numbers(reference_doctype, reference_name, purpose="whatsapp")
+    
+    # 2. Check document fields if it's a Contact
+    if reference_doctype == "Contact":
+        numbers.extend(_get_contact_numbers(reference_name, purpose="whatsapp"))
+        
+    # Return deduped list
+    from whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_notification.whatsapp_notification import _dedupe_numbers
+    return _dedupe_numbers(numbers)

@@ -21,11 +21,14 @@
   "template",
   "code",
   "attach_document_print",
+  "print_format",
   "custom_attachment",
   "attach",
   "attach_from_field",
   "file_name",
   "section_break_11",
+  "send_to_all_assignees",
+  "recipients",
   "condition",
   "column_break_12",
   "fields",
@@ -107,6 +110,18 @@
    "reqd": 1
   },
   {
+   "default": "0",
+   "fieldname": "send_to_all_assignees",
+   "fieldtype": "Check",
+   "label": "Send To All Assignees"
+  },
+  {
+   "fieldname": "recipients",
+   "fieldtype": "Table",
+   "label": "Recipients",
+   "options": "Notification Recipient"
+  },
+  {
    "fieldname": "condition",
    "fieldtype": "Code",
    "label": "Condition",
@@ -145,6 +160,13 @@
    "fieldname": "attach_document_print",
    "fieldtype": "Check",
    "label": " Attach Document Print"
+  },
+  {
+   "depends_on": "eval:doc.attach_document_print",
+   "fieldname": "print_format",
+   "fieldtype": "Link",
+   "label": "Print Format",
+   "options": "Print Format"
   },
   {
    "default": "0",

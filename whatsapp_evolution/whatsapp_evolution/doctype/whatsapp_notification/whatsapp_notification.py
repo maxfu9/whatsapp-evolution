@@ -82,19 +82,6 @@ def _should_retry_on_default_account(error_message):
     )
 
 
-def _resolve_print_format(doctype, explicit_print_format=None):
-    fmt = (explicit_print_format or "").strip()
-    if fmt:
-        return fmt
-    try:
-        meta = frappe.get_meta(doctype)
-        if meta and meta.default_print_format:
-            return meta.default_print_format
-    except Exception:
-        pass
-    return "Standard"
-
-
 def _looks_like_phone(value):
     if not value:
         return False
@@ -145,40 +132,93 @@ def _dedupe_numbers(numbers):
     return out
 
 
-def _contact_has_whatsapp_tick():
+def _is_primary_phone_row(row):
+    if not row:
+        return False
+    return any(
+        frappe.utils.cint(row.get(flag))
+        for flag in ("is_primary_mobile", "is_primary_phone", "is_primary")
+    )
+
+
+def _resolve_print_format(doctype_name, selected_print_format=None):
+    selected = (selected_print_format or "").strip()
+    if selected:
+        return selected
+
+    default_format = None
+    if doctype_name:
+        default_format = frappe.db.get_value("DocType", doctype_name, "default_print_format")
+        if not default_format:
+            default_format = frappe.db.get_value(
+                "Property Setter",
+                filters={
+                    "doc_type": doctype_name,
+                    "property": "default_print_format",
+                },
+                fieldname="value",
+            )
+    return default_format or "Standard"
+
+
+def _get_tick_fields(purpose="notification"):
+    """
+    Find fields in Contact Phone that match the requested purpose.
+    purpose='notification' -> fields containing 'notification'
+    purpose='whatsapp' -> fields containing 'whatsapp'
+    """
     meta = frappe.get_meta("Contact Phone")
-    for field in ("is_whatsapp_number", "is_whatsapp", "whatsapp"):
-        if meta.get_field(field):
-            return field
-    return None
+    tick_fields = []
+    search_term = purpose.lower()
+    
+    for field in meta.fields:
+        if field.fieldtype == "Check" and search_term in field.fieldname.lower():
+            tick_fields.append(field.fieldname)
+            
+    # Fallbacks for standard naming
+    if purpose == "whatsapp":
+        for default_field in ("is_whatsapp_number", "is_whatsapp", "whatsapp"):
+            if meta.get_field(default_field) and default_field not in tick_fields:
+                tick_fields.append(default_field)
+    elif purpose == "notification":
+        for default_field in ("is_notification_number", "is_notification", "notification"):
+            if meta.get_field(default_field) and default_field not in tick_fields:
+                tick_fields.append(default_field)
+
+    return tick_fields
 
 
-def _get_contact_numbers(contact_name):
+@frappe.whitelist()
+def get_contact_whatsapp_numbers(contact_name):
+    return _get_contact_numbers(contact_name, purpose="whatsapp")
+
+
+def _get_contact_numbers(contact_name, purpose="notification"):
     if not contact_name or not frappe.db.exists("Contact", contact_name):
         return []
 
     contact = frappe.get_doc("Contact", contact_name)
     phone_rows = contact.get("phone_nos") or []
-    tick_field = _contact_has_whatsapp_tick()
+    tick_fields = _get_tick_fields(purpose=purpose)
 
     numbers = []
-    if tick_field:
+    if tick_fields:
+        primary_numbers = []
+        secondary_numbers = []
         for row in phone_rows:
-            if frappe.utils.cint(row.get(tick_field)):
-                numbers.extend(_split_candidate_numbers(row.get("phone")))
-        return _dedupe_numbers(numbers)
+            if any(frappe.utils.cint(row.get(tf)) for tf in tick_fields):
+                row_numbers = _split_candidate_numbers(row.get("phone"))
+                if _is_primary_phone_row(row):
+                    primary_numbers.extend(row_numbers)
+                else:
+                    secondary_numbers.extend(row_numbers)
+        return _dedupe_numbers(primary_numbers + secondary_numbers)
 
-    for row in phone_rows:
-        numbers.extend(_split_candidate_numbers(row.get("phone")))
-
-    if not numbers:
-        numbers.extend(_split_candidate_numbers(contact.get("mobile_no")))
-        numbers.extend(_split_candidate_numbers(contact.get("phone")))
-
-    return _dedupe_numbers(numbers)
+    # Enforce explicit consent-only behavior.
+    return []
 
 
-def _get_dynamic_link_contact_numbers(link_doctype, link_name):
+def _get_dynamic_link_contact_numbers(link_doctype, link_name, purpose="notification"):
     if not link_doctype or not link_name:
         return []
 
@@ -193,19 +233,8 @@ def _get_dynamic_link_contact_numbers(link_doctype, link_name):
     )
     numbers = []
     for contact_name in contact_names:
-        numbers.extend(_get_contact_numbers(contact_name))
+        numbers.extend(_get_contact_numbers(contact_name, purpose=purpose))
     return _dedupe_numbers(numbers)
-
-
-def _get_employee_cell_numbers(employee_name):
-    if not employee_name:
-        return []
-    if not frappe.db.exists("DocType", "Employee"):
-        return []
-    if not frappe.db.exists("Employee", employee_name):
-        return []
-    cell_number = frappe.db.get_value("Employee", employee_name, "cell_number")
-    return _dedupe_numbers(_split_candidate_numbers(cell_number))
 
 
 def _insert_notification_log(template, error=None, response=None):
@@ -393,14 +422,6 @@ class WhatsAppNotification(Document):
                     self.reference_doctype,
                 ))
 
-    def after_insert(self):
-        """Refresh cached notification map after create."""
-        frappe.cache().delete_value("whatsapp_notification_map")
-
-    def on_update(self):
-        """Refresh cached notification map after update."""
-        frappe.cache().delete_value("whatsapp_notification_map")
-
 
     def send_scheduled_message(self) -> dict:
         """Specific to API endpoint Server Scripts."""
@@ -442,7 +463,6 @@ class WhatsAppNotification(Document):
                     "components": []
                 }
             }
-            self.content_type = template.get("header_type", "text").lower()
             self.notify(data, template_account=template.get("whatsapp_account"))
 
 
@@ -508,34 +528,34 @@ class WhatsAppNotification(Document):
             attachment_url = ""
             attachment_filename = ""
             if self.attach_document_print:
-                    key = doc.get_document_share_key()  # noqa
-                    frappe.db.commit()
-                    print_format = _resolve_print_format(doc_data["doctype"])
-                    link = get_pdf_link(
-                        doc_data["doctype"],
-                        doc_data["name"],
-                        print_format=print_format,
-                    )
+                key = doc.get_document_share_key()  # noqa
+                frappe.db.commit()
+                print_format = _resolve_print_format(doc_data["doctype"], self.print_format)
+                link = get_pdf_link(
+                    doc_data["doctype"],
+                    doc_data["name"],
+                    print_format=print_format,
+                )
 
-                    attachment_filename = f'{doc_data["name"]}.pdf'
-                    attachment_url = f"{frappe.utils.get_url()}{link}&key={key}"
+                attachment_filename = f'{doc_data["name"]}.pdf'
+                attachment_url = f"{frappe.utils.get_url()}{link}&key={key}"
 
             elif self.custom_attachment:
-                    attachment_filename = self.file_name
+                attachment_filename = self.file_name
 
-                    if self.attach_from_field:
-                        file_url = doc_data[self.attach_from_field]
-                        if not file_url.startswith("http"):
-                            # get share key so that private files can be sent
-                            key = doc.get_document_share_key()
-                            file_url = f"{frappe.utils.get_url()}{file_url}&key={key}"
-                    else:
-                        file_url = self.attach
+                if self.attach_from_field:
+                    file_url = doc_data[self.attach_from_field]
+                    if not file_url.startswith("http"):
+                        # get share key so that private files can be sent
+                        key = doc.get_document_share_key()
+                        file_url = f"{frappe.utils.get_url()}{file_url}&key={key}"
+                else:
+                    file_url = self.attach
 
-                    if file_url.startswith("http"):
-                        attachment_url = f"{file_url}"
-                    else:
-                        attachment_url = f"{frappe.utils.get_url()}{file_url}"
+                if file_url.startswith("http"):
+                    attachment_url = f"{file_url}"
+                else:
+                    attachment_url = f"{frappe.utils.get_url()}{file_url}"
 
             for phone_number in recipient_numbers:
                 formatted_to = self.format_number(phone_number)
@@ -553,6 +573,13 @@ class WhatsAppNotification(Document):
                             template_name=template.name,
                             ttl=180,
                         ):
+                            _insert_notification_log(
+                                self.template,
+                                error=(
+                                    f"Skipped duplicate notification for {formatted_to} on "
+                                    f"{doc_data.get('doctype')} {doc_data.get('name')}"
+                                ),
+                            )
                             continue
 
                         if _was_recently_sent(
@@ -562,8 +589,22 @@ class WhatsAppNotification(Document):
                             template_name=template.name,
                             seconds=120,
                         ):
+                            _insert_notification_log(
+                                self.template,
+                                error=(
+                                    f"Skipped recent duplicate (120s) for {formatted_to} on "
+                                    f"{doc_data.get('doctype')} {doc_data.get('name')}"
+                                ),
+                            )
                             continue
                 except LockTimeoutError:
+                    _insert_notification_log(
+                        self.template,
+                        error=(
+                            f"Skipped due to lock timeout for {formatted_to} on "
+                            f"{doc_data.get('doctype')} {doc_data.get('name')}"
+                        ),
+                    )
                     continue
 
                 data = {
@@ -616,8 +657,6 @@ class WhatsAppNotification(Document):
                             ],
                         }
                     )
-                self.content_type = template.header_type.lower() if template.header_type else None
-
                 if template.buttons:
                     button_fields = self.button_fields.split(",") if self.button_fields else []
                     for idx, btn in enumerate(template.buttons):
@@ -634,52 +673,192 @@ class WhatsAppNotification(Document):
                                     }
                                 )
 
-                self.notify(data, doc_data, template_account=template.whatsapp_account)
+                try:
+                    self.notify(data, doc_data, template_account=template.whatsapp_account)
+                except Exception:
+                    _insert_notification_log(
+                        self.template,
+                        error=(
+                            f"Recipient send failed for {formatted_to} on "
+                            f"{doc_data.get('doctype')} {doc_data.get('name')}: {frappe.get_traceback()}"
+                        ),
+                    )
+                    continue
 
     def get_recipient_numbers(self, doc, doc_data, phone_no=None):
         numbers = []
         if phone_no:
             numbers.extend(_split_candidate_numbers(phone_no))
 
+        contact_found = False
+        val_doctype = getattr(doc, "doctype", None)
+        val_name = getattr(doc, "name", None)
+
+        # Sensitivity Check: Determine if this is an entity where we must be strict about authorization
+        is_sensitive_entity = val_doctype in ("Customer", "Supplier", "Lead", "Prospect", "Contact")
+
+        # 1. Handle Direct Contact or Linked Entity
+        if val_doctype == "Contact" and val_name:
+            numbers.extend(_get_contact_numbers(val_name, purpose="notification"))
+            contact_found = True
+
+        if val_doctype in ("Customer", "Supplier", "Lead", "Prospect") and val_name:
+            has_links = frappe.db.exists("Dynamic Link", {"link_doctype": val_doctype, "link_name": val_name, "parenttype": "Contact"})
+            if has_links:
+                numbers.extend(_get_dynamic_link_contact_numbers(val_doctype, val_name, purpose="notification"))
+                contact_found = True
+
+        # 2. Handle Explicit Field Selection
         if self.field_name:
             value = doc_data.get(self.field_name)
-            numbers.extend(_split_candidate_numbers(value))
-            numbers.extend(_get_contact_numbers(value))
-            numbers.extend(_get_employee_cell_numbers(value))
+            # For sensitive entities, we only allow field_name if it resolves to a check-marked Contact.
+            # We skip adding the raw value directly at this stage if is_sensitive_entity is True.
+            if not is_sensitive_entity:
+                numbers.extend(_split_candidate_numbers(value))
 
-        for field in ("contact_mobile", "mobile_no", "mobile", "phone", "contact_phone"):
-            numbers.extend(_split_candidate_numbers(doc_data.get(field)))
+            if value and frappe.db.exists("Contact", value):
+                numbers.extend(_get_contact_numbers(value, purpose="notification"))
+                contact_found = True
+            elif is_sensitive_entity and _looks_like_phone(value):
+                # If it's a phone number string in a sensitive doc's field, we do NOT add it unless unauthorized fallback is okay.
+                # Per user request: "Only sent to those whose... check in contact list".
+                # However, if explicitly chosen in field_name, some legacy users might expect it.
+                # But to be safe and follow the request "Sensitive information", we stay strict.
+                pass
+
+        # 3. Handle Other Linked Contact Fields
+        contact_person = doc_data.get("contact_person")
+        if contact_person and frappe.db.exists("Contact", contact_person):
+            numbers.extend(_get_contact_numbers(contact_person, purpose="notification"))
+            contact_found = True
 
         party_type = doc_data.get("party_type")
         party = doc_data.get("party")
         if party_type and party:
-            numbers.extend(_get_dynamic_link_contact_numbers(party_type, party))
-            if party_type == "Employee":
-                numbers.extend(_get_employee_cell_numbers(party))
+            has_links = frappe.db.exists("Dynamic Link", {"link_doctype": party_type, "link_name": party, "parenttype": "Contact"})
+            if has_links:
+                numbers.extend(_get_dynamic_link_contact_numbers(party_type, party, purpose="notification"))
+                contact_found = True
 
         for linked_dt_field in ("customer", "supplier", "lead", "prospect"):
             linked_name = doc_data.get(linked_dt_field)
             if linked_name:
                 linked_dt = linked_dt_field.title()
-                numbers.extend(_get_dynamic_link_contact_numbers(linked_dt, linked_name))
+                has_links = frappe.db.exists("Dynamic Link", {"link_doctype": linked_dt, "link_name": linked_name, "parenttype": "Contact"})
+                if has_links:
+                    numbers.extend(_get_dynamic_link_contact_numbers(linked_dt, linked_name, purpose="notification"))
+                    contact_found = True
 
-        for employee_field in ("employee", "employee_name"):
-            employee_name = doc_data.get(employee_field)
-            if employee_name:
-                numbers.extend(_get_employee_cell_numbers(employee_name))
+        # 4. Fallbacks (Disabled for Sensitive Entities)
+        # If no contacts were found at all, and it's NOT a sensitive entity, we fall back to raw fields.
+        if not contact_found and not is_sensitive_entity:
+            for field in (
+                "contact_mobile",
+                "mobile_no",
+                "mobile",
+                "phone",
+                "contact_phone",
+                "whatsapp_no",
+                "phone_no",
+                "customer_mobile_no",
+                "recipient_number",
+            ):
+                numbers.extend(_split_candidate_numbers(doc_data.get(field)))
+
+            # If document links to a party but has no Dynamic Link contacts, fall back to party phone fields.
+            for linked_dt_field in ("customer", "supplier", "lead", "prospect"):
+                linked_name = doc_data.get(linked_dt_field)
+                if not linked_name:
+                    continue
+                linked_dt = linked_dt_field.title()
+                if not frappe.db.exists(linked_dt, linked_name):
+                    continue
+                try:
+                    party_doc = frappe.get_doc(linked_dt, linked_name)
+                    for field in (
+                        "mobile_no",
+                        "mobile",
+                        "phone",
+                        "phone_no",
+                        "whatsapp_no",
+                        "contact_mobile",
+                    ):
+                        numbers.extend(_split_candidate_numbers(party_doc.get(field)))
+                except Exception:
+                    continue
+
+        # 5. System Users (Roles/Assignees) are always authorized via their System Profile
+        sys_numbers = self._get_system_user_numbers(doc, doc_data)
+        for num in sys_numbers:
+            numbers.extend(_split_candidate_numbers(num))
 
         return _dedupe_numbers(numbers)
+
+    def _get_system_user_numbers(self, doc, doc_data):
+        receiver_list = []
+        
+        # 1. Send to all assignees
+        if getattr(self, "send_to_all_assignees", 0):
+            assignees = frappe.get_all(
+                "ToDo",
+                filters={
+                    "reference_type": doc_data.get("doctype"),
+                    "reference_name": doc_data.get("name"),
+                    "status": "Open",
+                },
+                pluck="allocated_to",
+            )
+            if assignees:
+                receiver_list.extend(self._get_user_info(assignees, "mobile_no"))
+                
+        # 2. Notification Recipients
+        if getattr(self, "recipients", None):
+            for recipient in self.recipients:
+                if recipient.get("condition"):
+                    if not frappe.safe_eval(recipient.get("condition"), get_safe_globals(), dict(doc=doc_data)):
+                        continue
+
+                # For sending messages to the owner's mobile phone number
+                if recipient.get("receiver_by_document_field") == "owner":
+                    receiver_list.extend(self._get_user_info([doc_data.get("owner")], "mobile_no"))
+                # For sending messages to the number specified in the receiver field (if it is a user link)
+                elif recipient.get("receiver_by_document_field"):
+                    val = doc_data.get(recipient.get("receiver_by_document_field"))
+                    if val and frappe.db.exists("User", val):
+                        receiver_list.extend(self._get_user_info([val], "mobile_no"))
+                    elif val:
+                        # Support direct number fields on source docs.
+                        receiver_list.extend(_split_candidate_numbers(val))
+
+                # For sending messages to specified role
+                if recipient.get("receiver_by_role"):
+                    roles = frappe.get_all("Has Role", filters={"role": recipient.get("receiver_by_role")}, pluck="parent")
+                    if roles:
+                        receiver_list.extend(self._get_user_info(roles, "mobile_no"))
+                        
+        return receiver_list
+
+    def _get_user_info(self, users, field="mobile_no"):
+        if not users:
+            return []
+        numbers = frappe.get_all(
+            "User",
+            filters={"name": ["in", users], "enabled": 1},
+            pluck=field
+        )
+        phone_numbers = frappe.get_all(
+            "User",
+            filters={"name": ["in", users], "enabled": 1},
+            pluck="phone"
+        )
+        all_nums = [n for n in (numbers + phone_numbers) if n]
+        return list(set(all_nums))
 
     def notify(self, data, doc_data=None, template_account=None):
         """Notify."""
         default_account = get_whatsapp_account(account_type="outgoing")
         default_account_name = default_account.name if default_account else None
         effective_account = template_account or default_account_name
-
-        if effective_account and default_account_name and effective_account != default_account_name:
-            instance = frappe.db.get_value("WhatsApp Account", effective_account, "evolution_instance")
-            if not instance or str(instance).strip().lower() == "erpnext":
-                effective_account = default_account_name
 
         def _send_with_account(account_name):
             if not _is_evolution_enabled(account_name):
@@ -720,11 +899,11 @@ class WhatsAppNotification(Document):
                 try:
                     ref_doctype = _doc_value(doc_data, "doctype")
                     ref_name = _doc_value(doc_data, "name")
+                    print_format = _resolve_print_format(ref_doctype, self.print_format)
                     key = frappe.get_doc(ref_doctype, ref_name).get_document_share_key()
-                    default_print_format = _resolve_print_format(ref_doctype)
-                    link = get_pdf_link(ref_doctype, ref_name, print_format=default_print_format)
+                    link = get_pdf_link(ref_doctype, ref_name, print_format=print_format)
                     media_url = f"{frappe.utils.get_url()}{link}&key={key}"
-                    pdf = frappe.attach_print(ref_doctype, ref_name, print_format=default_print_format)
+                    pdf = frappe.attach_print(ref_doctype, ref_name, print_format=print_format)
                     media_bytes = pdf.get("fcontent")
                     media_name = pdf.get("fname")
                     media_type = "document"
@@ -752,6 +931,7 @@ class WhatsAppNotification(Document):
                 "type": "Outgoing",
                 "message": rendered_text,
                 "to": data.get("to"),
+                "whatsapp_account": account_name or "",
                 "message_type": "Manual",
                 "message_id": _extract_response_message_id(response) or f"evo-log-{frappe.generate_hash(length=8)}",
                 "content_type": content_type,
@@ -820,7 +1000,12 @@ class WhatsAppNotification(Document):
 
     def format_number(self, number):
         """Format number."""
-        return format_number(number)
+        if not number:
+            return number
+        if (number.startswith("+")):
+            number = number[1:len(number)]
+
+        return number
 
     def get_documents_for_today(self):
         """get list of documents that will be triggered today"""
@@ -883,12 +1068,8 @@ def send_template_message_job(
     default_template_name: str | None = None,
     ignore_condition: bool = False,
     delay_seconds: int = 0,
-    **kwargs,
 ):
     """Background worker for delayed WhatsApp notification sends."""
-    # Ignore extra enqueue metadata keys (e.g. track_job) for compatibility.
-    _ = kwargs
-
     if delay_seconds and delay_seconds > 0:
         sleep(delay_seconds)
 
