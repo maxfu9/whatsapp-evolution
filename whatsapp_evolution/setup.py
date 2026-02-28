@@ -89,7 +89,15 @@ def setup_custom_fields():
         ]
     }
 
-    create_custom_fields(custom_fields, update=True)
+    # In CI or frappe-only installs, ERPNext doctypes (e.g. Sales Invoice,
+    # Payment Entry) may not exist yet. Skip missing doctypes safely.
+    existing_custom_fields = {}
+    for doctype, fields in custom_fields.items():
+        if frappe.db.exists("DocType", doctype):
+            existing_custom_fields[doctype] = fields
+
+    if existing_custom_fields:
+        create_custom_fields(existing_custom_fields, update=True)
     add_whatsapp_communication_medium()
 
 def add_whatsapp_communication_medium():
