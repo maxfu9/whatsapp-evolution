@@ -66,6 +66,26 @@ def setup_custom_fields():
                 "no_copy": 1,
                 "print_hide": 1,
             },
+        ],
+        "Communication": [
+            {
+                "fieldname": "link_doctype",
+                "label": "Link DocType",
+                "fieldtype": "Link",
+                "options": "DocType",
+                "insert_after": "reference_name",
+                "read_only": 1,
+                "print_hide": 1,
+            },
+            {
+                "fieldname": "link_name",
+                "label": "Link Name",
+                "fieldtype": "Dynamic Link",
+                "options": "link_doctype",
+                "insert_after": "link_doctype",
+                "read_only": 1,
+                "print_hide": 1,
+            }
         ]
     }
 
