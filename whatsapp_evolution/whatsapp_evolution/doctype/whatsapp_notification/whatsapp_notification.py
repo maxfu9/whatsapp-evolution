@@ -528,34 +528,34 @@ class WhatsAppNotification(Document):
             attachment_url = ""
             attachment_filename = ""
             if self.attach_document_print:
-                    key = doc.get_document_share_key()  # noqa
-                    frappe.db.commit()
-                    print_format = _resolve_print_format(doc_data["doctype"], self.print_format)
-                    link = get_pdf_link(
-                        doc_data["doctype"],
-                        doc_data["name"],
-                        print_format=print_format,
-                    )
+                key = doc.get_document_share_key()  # noqa
+                frappe.db.commit()
+                print_format = _resolve_print_format(doc_data["doctype"], self.print_format)
+                link = get_pdf_link(
+                    doc_data["doctype"],
+                    doc_data["name"],
+                    print_format=print_format,
+                )
 
-                    attachment_filename = f'{doc_data["name"]}.pdf'
-                    attachment_url = f"{frappe.utils.get_url()}{link}&key={key}"
+                attachment_filename = f'{doc_data["name"]}.pdf'
+                attachment_url = f"{frappe.utils.get_url()}{link}&key={key}"
 
             elif self.custom_attachment:
-                    attachment_filename = self.file_name
+                attachment_filename = self.file_name
 
-                    if self.attach_from_field:
-                        file_url = doc_data[self.attach_from_field]
-                        if not file_url.startswith("http"):
-                            # get share key so that private files can be sent
-                            key = doc.get_document_share_key()
-                            file_url = f"{frappe.utils.get_url()}{file_url}&key={key}"
-                    else:
-                        file_url = self.attach
+                if self.attach_from_field:
+                    file_url = doc_data[self.attach_from_field]
+                    if not file_url.startswith("http"):
+                        # get share key so that private files can be sent
+                        key = doc.get_document_share_key()
+                        file_url = f"{frappe.utils.get_url()}{file_url}&key={key}"
+                else:
+                    file_url = self.attach
 
-                    if file_url.startswith("http"):
-                        attachment_url = f"{file_url}"
-                    else:
-                        attachment_url = f"{frappe.utils.get_url()}{file_url}"
+                if file_url.startswith("http"):
+                    attachment_url = f"{file_url}"
+                else:
+                    attachment_url = f"{frappe.utils.get_url()}{file_url}"
 
             for phone_number in recipient_numbers:
                 formatted_to = self.format_number(phone_number)
