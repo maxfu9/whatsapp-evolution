@@ -50,6 +50,13 @@
     color: #166534;
 }
 
+.wa-status-read,
+.wa-status-played {
+    background: #eff6ff;
+    border-color: #bfdbfe;
+    color: #1d4ed8;
+}
+
 .wa-status-failed,
 .wa-status-error {
     background: #fef2f2;

@@ -481,6 +481,21 @@ def _normalize_webhook_data(data):
     return payload if isinstance(payload, dict) else {}
 
 
+def _extract_instance_name(data, payload_data):
+    if not isinstance(data, dict):
+        data = {}
+    if not isinstance(payload_data, dict):
+        payload_data = {}
+    return (
+        data.get("instance")
+        or data.get("instanceName")
+        or data.get("instance_name")
+        or payload_data.get("instance")
+        or payload_data.get("instanceName")
+        or payload_data.get("instance_name")
+    )
+
+
 @frappe.whitelist(allow_guest=True)
 def handle_webhook():
     data = frappe.local.request.get_json(silent=True) or {}
@@ -513,12 +528,11 @@ def handle_webhook():
         key_data = payload_data.get("key") if isinstance(payload_data, dict) else {}
         remote_jid = (key_data or {}).get("remoteJid")
         from_me = (key_data or {}).get("fromMe")
-        instance_name = (
-            data.get("instance")
-            or data.get("instanceName")
-            or data.get("instance_name")
-            or (payload_data.get("instance") if isinstance(payload_data, dict) else None)
-        )
+        if not remote_jid:
+            remote_jid = msg.get("to")
+            if remote_jid and "@" not in remote_jid:
+                remote_jid = f"{remote_jid}@s.whatsapp.net"
+        instance_name = _extract_instance_name(data, payload_data)
         status_text = _map_evolution_status(status_code)
 
         _log_webhook_debug(
@@ -532,9 +546,9 @@ def handle_webhook():
             }
         )
 
-        if message_id and status_code is not None:
+        if status_code is not None:
             if status_text:
-                found_by_id = _find_message_name_by_id(message_id)
+                found_by_id = _find_message_name_by_id(message_id) if message_id else None
                 found = found_by_id
                 if not found and remote_jid:
                     found = _find_recent_outgoing_by_number(remote_jid, instance_name=instance_name)
