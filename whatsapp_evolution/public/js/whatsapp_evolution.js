@@ -170,12 +170,11 @@ function open_whatsapp_dialog(frm) {
 		}
 	});
 
-	autofill_mobile_from_doc(frm, dialog);
-	toggle_mode_fields(dialog);
-	set_default_whatsapp_account(dialog);
-
-	dialog.show();
-}
+		dialog.show();
+		toggle_mode_fields(dialog);
+		set_default_whatsapp_account(dialog);
+		autofill_contact_and_mobile_from_doc(frm, dialog);
+	}
 
 function set_default_whatsapp_account(dialog) {
 	frappe.call({
@@ -312,7 +311,8 @@ function populate_mobile_from_contact(dialog) {
 	frappe.call({
 		method: "whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_notification.whatsapp_notification.get_contact_whatsapp_numbers",
 		args: {
-			contact_name: contact_name
+			contact_name: contact_name,
+			primary_only: 1
 		},
 		callback(r) {
 			const numbers = r.message || [];
@@ -323,32 +323,22 @@ function populate_mobile_from_contact(dialog) {
 	});
 }
 
-function autofill_mobile_from_doc(frm, dialog) {
-	// For manual dialogue, we want to be helpful but strict.
-	// We'll call the backend to get all "WhatsApp" authorized numbers for this document.
+function autofill_contact_and_mobile_from_doc(frm, dialog) {
+	// Strict prefill: only from Contact Phone rows where both
+	// Is Primary Mobile and WhatsApp are checked.
 	frappe.call({
-		method: "whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_message.whatsapp_message.get_authorized_whatsapp_numbers",
+		method: "whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_message.whatsapp_message.get_default_contact_and_whatsapp_number",
 		args: {
 			reference_doctype: frm.doc.doctype,
 			reference_name: frm.doc.name
 		},
 		callback(r) {
-			const numbers = r.message || [];
-			if (numbers.length) {
-				dialog.set_value("mobile_no", numbers[0]);
-			} else {
-				// Fallback to basic field pull
-				const candidates = [
-					frm.doc.mobile_no,
-					frm.doc.mobile,
-					frm.doc.phone,
-					frm.doc.contact_mobile,
-					frm.doc.whatsapp_no
-				].filter(Boolean);
-
-				if (candidates.length) {
-					dialog.set_value("mobile_no", candidates[0]);
-				}
+			const defaults = r.message || {};
+			if (defaults.contact) {
+				dialog.set_value("contact", defaults.contact);
+			}
+			if (defaults.mobile_no) {
+				dialog.set_value("mobile_no", defaults.mobile_no);
 			}
 		}
 	});

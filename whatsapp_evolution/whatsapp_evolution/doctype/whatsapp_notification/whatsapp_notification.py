@@ -137,7 +137,12 @@ def _is_primary_phone_row(row):
         return False
     return any(
         frappe.utils.cint(row.get(flag))
-        for flag in ("is_primary_mobile", "is_primary_phone", "is_primary")
+        for flag in (
+            "is_primary_mobile_no",
+            "is_primary_mobile",
+            "is_primary_phone",
+            "is_primary",
+        )
     )
 
 
@@ -189,11 +194,15 @@ def _get_tick_fields(purpose="notification"):
 
 
 @frappe.whitelist()
-def get_contact_whatsapp_numbers(contact_name):
-    return _get_contact_numbers(contact_name, purpose="whatsapp")
+def get_contact_whatsapp_numbers(contact_name, primary_only=0):
+    return _get_contact_numbers(
+        contact_name,
+        purpose="whatsapp",
+        primary_only=frappe.utils.cint(primary_only),
+    )
 
 
-def _get_contact_numbers(contact_name, purpose="notification"):
+def _get_contact_numbers(contact_name, purpose="notification", primary_only=False):
     if not contact_name or not frappe.db.exists("Contact", contact_name):
         return []
 
@@ -212,13 +221,15 @@ def _get_contact_numbers(contact_name, purpose="notification"):
                     primary_numbers.extend(row_numbers)
                 else:
                     secondary_numbers.extend(row_numbers)
+        if primary_only:
+            return _dedupe_numbers(primary_numbers)
         return _dedupe_numbers(primary_numbers + secondary_numbers)
 
     # Enforce explicit consent-only behavior.
     return []
 
 
-def _get_dynamic_link_contact_numbers(link_doctype, link_name, purpose="notification"):
+def _get_dynamic_link_contact_numbers(link_doctype, link_name, purpose="notification", primary_only=False):
     if not link_doctype or not link_name:
         return []
 
@@ -233,7 +244,13 @@ def _get_dynamic_link_contact_numbers(link_doctype, link_name, purpose="notifica
     )
     numbers = []
     for contact_name in contact_names:
-        numbers.extend(_get_contact_numbers(contact_name, purpose=purpose))
+        numbers.extend(
+            _get_contact_numbers(
+                contact_name,
+                purpose=purpose,
+                primary_only=primary_only,
+            )
+        )
     return _dedupe_numbers(numbers)
 
 
@@ -687,10 +704,9 @@ class WhatsAppNotification(Document):
 
     def get_recipient_numbers(self, doc, doc_data, phone_no=None):
         numbers = []
-        if phone_no:
-            numbers.extend(_split_candidate_numbers(phone_no))
+        if phone_no and frappe.db.exists("Contact", phone_no):
+            numbers.extend(_get_contact_numbers(phone_no, purpose="notification"))
 
-        contact_found = False
         val_doctype = getattr(doc, "doctype", None)
         val_name = getattr(doc, "name", None)
 
@@ -700,13 +716,11 @@ class WhatsAppNotification(Document):
         # 1. Handle Direct Contact or Linked Entity
         if val_doctype == "Contact" and val_name:
             numbers.extend(_get_contact_numbers(val_name, purpose="notification"))
-            contact_found = True
 
         if val_doctype in ("Customer", "Supplier", "Lead", "Prospect") and val_name:
             has_links = frappe.db.exists("Dynamic Link", {"link_doctype": val_doctype, "link_name": val_name, "parenttype": "Contact"})
             if has_links:
                 numbers.extend(_get_dynamic_link_contact_numbers(val_doctype, val_name, purpose="notification"))
-                contact_found = True
 
         # 2. Handle Explicit Field Selection
         if self.field_name:
@@ -718,7 +732,6 @@ class WhatsAppNotification(Document):
 
             if value and frappe.db.exists("Contact", value):
                 numbers.extend(_get_contact_numbers(value, purpose="notification"))
-                contact_found = True
             elif is_sensitive_entity and _looks_like_phone(value):
                 # If it's a phone number string in a sensitive doc's field, we do NOT add it unless unauthorized fallback is okay.
                 # Per user request: "Only sent to those whose... check in contact list".
@@ -730,7 +743,6 @@ class WhatsAppNotification(Document):
         contact_person = doc_data.get("contact_person")
         if contact_person and frappe.db.exists("Contact", contact_person):
             numbers.extend(_get_contact_numbers(contact_person, purpose="notification"))
-            contact_found = True
 
         party_type = doc_data.get("party_type")
         party = doc_data.get("party")
@@ -738,7 +750,6 @@ class WhatsAppNotification(Document):
             has_links = frappe.db.exists("Dynamic Link", {"link_doctype": party_type, "link_name": party, "parenttype": "Contact"})
             if has_links:
                 numbers.extend(_get_dynamic_link_contact_numbers(party_type, party, purpose="notification"))
-                contact_found = True
 
         for linked_dt_field in ("customer", "supplier", "lead", "prospect"):
             linked_name = doc_data.get(linked_dt_field)
@@ -747,45 +758,10 @@ class WhatsAppNotification(Document):
                 has_links = frappe.db.exists("Dynamic Link", {"link_doctype": linked_dt, "link_name": linked_name, "parenttype": "Contact"})
                 if has_links:
                     numbers.extend(_get_dynamic_link_contact_numbers(linked_dt, linked_name, purpose="notification"))
-                    contact_found = True
 
-        # 4. Fallbacks (Disabled for Sensitive Entities)
-        # If no contacts were found at all, and it's NOT a sensitive entity, we fall back to raw fields.
-        if not contact_found and not is_sensitive_entity:
-            for field in (
-                "contact_mobile",
-                "mobile_no",
-                "mobile",
-                "phone",
-                "contact_phone",
-                "whatsapp_no",
-                "phone_no",
-                "customer_mobile_no",
-                "recipient_number",
-            ):
-                numbers.extend(_split_candidate_numbers(doc_data.get(field)))
-
-            # If document links to a party but has no Dynamic Link contacts, fall back to party phone fields.
-            for linked_dt_field in ("customer", "supplier", "lead", "prospect"):
-                linked_name = doc_data.get(linked_dt_field)
-                if not linked_name:
-                    continue
-                linked_dt = linked_dt_field.title()
-                if not frappe.db.exists(linked_dt, linked_name):
-                    continue
-                try:
-                    party_doc = frappe.get_doc(linked_dt, linked_name)
-                    for field in (
-                        "mobile_no",
-                        "mobile",
-                        "phone",
-                        "phone_no",
-                        "whatsapp_no",
-                        "contact_mobile",
-                    ):
-                        numbers.extend(_split_candidate_numbers(party_doc.get(field)))
-                except Exception:
-                    continue
+        # 4. No raw mobile fallback:
+        # Auto notifications should only use Contact rows with explicit
+        # Notification consent checkbox enabled.
 
         # 5. System Users (Roles/Assignees) are always authorized via their System Profile
         sys_numbers = self._get_system_user_numbers(doc, doc_data)
