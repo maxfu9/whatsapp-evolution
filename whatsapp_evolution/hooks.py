@@ -67,9 +67,6 @@ app_include_js = [
 # Installation
 # ------------
 
-# This app depends on ERPNext doctypes such as Sales Invoice/Payment Entry.
-required_apps = ["erpnext"]
-
 # after_install = "whatsapp_evolution.install.after_install"
 after_install = "whatsapp_evolution.setup.setup_custom_fields"
 

@@ -772,20 +772,19 @@ class WhatsAppNotification(Document):
 
     def _get_system_user_numbers(self, doc, doc_data):
         receiver_list = []
-        
-        # 1. Send to all assignees
-        if getattr(self, "send_to_all_assignees", 0):
-            assignees = frappe.get_all(
-                "ToDo",
-                filters={
-                    "reference_type": doc_data.get("doctype"),
-                    "reference_name": doc_data.get("name"),
-                    "status": "Open",
-                },
-                pluck="allocated_to",
-            )
-            if assignees:
-                receiver_list.extend(self._get_user_info(assignees, "mobile_no"))
+
+        # 1. Always include assigned users for this document.
+        assignees = frappe.get_all(
+            "ToDo",
+            filters={
+                "reference_type": doc_data.get("doctype"),
+                "reference_name": doc_data.get("name"),
+                "status": "Open",
+            },
+            pluck="allocated_to",
+        )
+        if assignees:
+            receiver_list.extend(self._get_user_info(assignees, "mobile_no"))
                 
         # 2. Notification Recipients
         if getattr(self, "recipients", None):

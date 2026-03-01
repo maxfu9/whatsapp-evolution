@@ -55,7 +55,7 @@ def _get_outstanding_delta(doc):
     payment_type = doc.get("payment_type")
     effect = _get_payment_effect_amount(doc)
 
-    if not effect or party_type not in ("Customer", "Supplier"):
+    if not effect or party_type not in ("Customer", "Supplier", "Employee"):
         return 0.0
 
     # Delta means: after_balance = before_balance + delta
@@ -64,7 +64,7 @@ def _get_outstanding_delta(doc):
             return -effect
         if payment_type == "Pay":
             return effect
-    elif party_type == "Supplier":
+    elif party_type in ("Supplier", "Employee"):
         if payment_type == "Pay":
             return effect
         if payment_type == "Receive":
