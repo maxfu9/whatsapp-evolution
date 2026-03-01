@@ -230,9 +230,6 @@ doc_events = {
         "on_submit": "whatsapp_evolution.whatsapp_evolution.payment_entry_balance.update_payment_entry_whatsapp_balances",
         "on_update_after_submit": "whatsapp_evolution.whatsapp_evolution.payment_entry_balance.update_payment_entry_whatsapp_balances",
     },
-    "ToDo": {
-        "after_insert": "whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_notification.whatsapp_notification.send_assignment_notification_on_todo_create",
-    },
 }
 
 override_whatsapp_webhook = {
