@@ -196,6 +196,29 @@ def _render_template_text(template_text, params):
     return rendered
 
 
+def _extract_response_message_id(response):
+    if not isinstance(response, dict):
+        return ""
+
+    msg_id = response.get("id") or response.get("message_id")
+    if msg_id:
+        return str(msg_id)
+
+    key = response.get("key") or {}
+    if isinstance(key, dict) and key.get("id"):
+        return str(key.get("id"))
+
+    messages = response.get("messages") or []
+    if isinstance(messages, list) and messages:
+        first = messages[0] or {}
+        if isinstance(first, dict):
+            mid = first.get("id") or ((first.get("key") or {}).get("id") if isinstance(first.get("key"), dict) else None)
+            if mid:
+                return str(mid)
+
+    return ""
+
+
 def _is_evolution_enabled_global():
     return is_evolution_enabled()
 
@@ -967,7 +990,7 @@ class WhatsAppMessage(Document):
                 response = provider.send_message(to_number, fallback_text)
         else:
             response = provider.send_message(to_number, self.message or "")
-        self.message_id = response.get("id") or response.get("message_id") or ""
+        self.message_id = _extract_response_message_id(response)
         return
 
     def format_number(self, number):
