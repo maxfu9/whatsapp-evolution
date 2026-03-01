@@ -95,7 +95,7 @@ frappe.notification = {
 
 frappe.ui.form.on('WhatsApp Notification', {
 	refresh: function (frm) {
-		frm.trigger("load_template")
+		frm.events.load_template(frm, true);
 		frappe.notification.setup_fieldname_select(frm);
 		frappe.notification.setup_alerts_button(frm);
 
@@ -108,35 +108,49 @@ frappe.ui.form.on('WhatsApp Notification', {
 		});
 	},
 	template: function (frm) {
-		frm.trigger("load_template")
+		frm.events.load_template(frm, false);
 	},
-	load_template: function (frm) {
+	load_template: function (frm, silent_refresh = false) {
+		const set_field = (fieldname, value) => {
+			if (frm.doc[fieldname] === value) {
+				return;
+			}
+			if (silent_refresh) {
+				frm.doc[fieldname] = value;
+				frm.refresh_field(fieldname);
+				return;
+			}
+			frm.set_value(fieldname, value);
+		};
+
 		frappe.db.get_value(
 			"WhatsApp Templates",
 			frm.doc.template,
 			["template", "header_type"],
 			(r) => {
 				if (r && r.template) {
-					frm.set_value('header_type', r.header_type)
-					frm.refresh_field("header_type")
+					set_field("header_type", r.header_type || "");
 					if (['DOCUMENT', "IMAGE"].includes(r.header_type)) {
 						frm.toggle_display("custom_attachment", true);
 						frm.toggle_display("attach_document_print", true);
-						if (!frm.doc.custom_attachment) {
-							frm.set_value("attach_document_print", 1);
+						if (!silent_refresh && !frm.doc.custom_attachment) {
+							set_field("attach_document_print", 1);
 						}
-						frm.trigger("attach_document_print");
+						if (!silent_refresh) {
+							frm.trigger("attach_document_print");
+						}
 					} else {
 						frm.toggle_display("custom_attachment", false);
 						frm.toggle_display("attach_document_print", false);
-						frm.set_value("attach_document_print", 0)
-						frm.set_value("custom_attachment", 0)
+						if (!silent_refresh) {
+							set_field("attach_document_print", 0);
+							set_field("custom_attachment", 0);
+						}
 					}
 
 					frm.refresh_field("custom_attachment")
 
-					frm.set_value("code", r.template);
-					frm.refresh_field("code")
+					set_field("code", r.template || "");
 				}
 			}
 		)
