@@ -805,13 +805,23 @@ class WhatsAppMessage(Document):
         if self.template:
             subject += f" ({self.template})"
 
+        def _to_internal_email(value):
+            raw = (value or "").strip()
+            if not raw:
+                raw = "whatsapp"
+            if "@" in raw:
+                return raw
+            # Keep synthetic local-part RFC-friendly for Frappe email validation.
+            local = re.sub(r"[^A-Za-z0-9._+-]", "_", raw).strip("._")
+            if not local:
+                local = "whatsapp"
+            return f"{local}@whatsapp.local"
+
         sender_internal = (self.whatsapp_account if self.type == "Outgoing" else self.profile_name or self.get("from")) or "whatsapp"
-        # Ensure sender passes Frappe's Email validation (Data with options="Email")
-        # We use a dummy @whatsapp.local domain to satisfy the regex
-        sender_email = f"{sender_internal}@whatsapp.local" if "@" not in sender_internal else sender_internal
+        sender_email = _to_internal_email(sender_internal)
 
         recipient_internal = (self.to if self.type == "Outgoing" else self.whatsapp_account) or "whatsapp"
-        recipient_email = f"{recipient_internal}@whatsapp.local" if "@" not in recipient_internal else recipient_internal
+        recipient_email = _to_internal_email(recipient_internal)
 
         comm = frappe.get_doc({
             "doctype": "Communication",

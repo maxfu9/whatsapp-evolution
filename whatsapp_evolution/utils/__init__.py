@@ -188,17 +188,41 @@ def get_default_evolution_account():
     if not frappe.db.table_exists("WhatsApp Account"):
         return None
 
-    outgoing_default = frappe.db.get_value(
-        "WhatsApp Account",
-        {"is_default_outgoing": 1, "status": "Active"},
-        "name",
-    )
+    def _get_active_with_instance(filters=None):
+        filters = dict(filters or {})
+        filters["status"] = "Active"
+        rows = frappe.get_all(
+            "WhatsApp Account",
+            filters=filters,
+            fields=["name", "evolution_instance"],
+            limit=1,
+            order_by="modified desc",
+        )
+        if rows and (rows[0].get("evolution_instance") or "").strip():
+            return rows[0].get("name")
+        return None
+
+    outgoing_default = _get_active_with_instance({"is_default_outgoing": 1})
     if outgoing_default:
         return frappe.get_doc("WhatsApp Account", outgoing_default)
 
-    default_name = frappe.db.get_value("WhatsApp Account", {"is_default": 1, "status": "Active"}, "name")
+    default_name = _get_active_with_instance({"is_default": 1})
     if default_name:
         return frappe.get_doc("WhatsApp Account", default_name)
+
+    any_with_instance = frappe.db.sql(
+        """
+        select name
+        from `tabWhatsApp Account`
+        where status = 'Active'
+          and ifnull(evolution_instance, '') != ''
+        order by is_default_outgoing desc, is_default desc, modified desc
+        limit 1
+        """,
+        as_dict=True,
+    )
+    if any_with_instance:
+        return frappe.get_doc("WhatsApp Account", any_with_instance[0].name)
 
     fallback_name = frappe.db.get_value("WhatsApp Account", {"status": "Active"}, "name")
     if fallback_name:
@@ -216,6 +240,13 @@ def get_evolution_settings(whatsapp_account=None):
         account_doc = frappe.get_doc("WhatsApp Account", whatsapp_account)
     else:
         account_doc = get_default_evolution_account()
+
+    # If selected account is active but has no Evolution instance, prefer
+    # another active account that has one.
+    if account_doc and not (account_doc.get("evolution_instance") or "").strip():
+        fallback_account = get_default_evolution_account()
+        if fallback_account and fallback_account.name != account_doc.name:
+            account_doc = fallback_account
 
     base = (account_doc.get("evolution_api_base") if account_doc else None) or settings_doc.get("evolution_api_base")
     token = (

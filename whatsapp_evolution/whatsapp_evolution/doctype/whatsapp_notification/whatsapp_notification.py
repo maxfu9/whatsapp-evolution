@@ -762,9 +762,13 @@ class WhatsAppNotification(Document):
         # 1. Handle Explicit Field Selection only
         if self.field_name:
             value = doc_data.get(self.field_name)
-            numbers.extend(_split_candidate_numbers(value))
-            if value and frappe.db.exists("Contact", value):
-                numbers.extend(_get_contact_numbers(value, purpose="notification"))
+            if _is_user_recipient_field(doc_data.get("doctype"), self.field_name):
+                if value and frappe.db.exists("User", value):
+                    numbers.extend(self._get_user_info([value], "mobile_no"))
+            else:
+                numbers.extend(_split_candidate_numbers(value))
+                if value and frappe.db.exists("Contact", value):
+                    numbers.extend(_get_contact_numbers(value, purpose="notification"))
 
         # 2. Handle recipient table document fields that are not user fields
         # (e.g. custom phone field, customer/supplier/contact link field).
@@ -1030,9 +1034,17 @@ class WhatsAppNotification(Document):
             ).insert(ignore_permissions=True)
 
 
+    def _invalidate_notification_cache(self):
+        frappe.cache().delete_value("whatsapp_notification_map")
+
+
+    def on_update(self):
+        self._invalidate_notification_cache()
+
+
     def on_trash(self):
         """On delete remove from schedule."""
-        frappe.cache().delete_value("whatsapp_notification_map")
+        self._invalidate_notification_cache()
 
 
     def format_number(self, number):
