@@ -1196,6 +1196,17 @@ def get_linked_contacts_query(doctype, txt, searchfield, start, page_len, filter
     links = {(reference_doctype, reference_name)}
     try:
         ref_doc = frappe.get_doc(reference_doctype, reference_name)
+        # Directly linked contact on the source doc.
+        contact_person = ref_doc.get("contact_person")
+        if contact_person:
+            links.add(("Contact", contact_person))
+
+        # Generic party links used by docs like Payment Entry.
+        party_type = ref_doc.get("party_type")
+        party = ref_doc.get("party")
+        if party_type and party:
+            links.add((party_type, party))
+
         for field in ("customer", "supplier", "lead", "prospect"):
             value = ref_doc.get(field)
             if value:
