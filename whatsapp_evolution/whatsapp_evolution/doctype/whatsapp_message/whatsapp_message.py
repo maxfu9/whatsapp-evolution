@@ -2,6 +2,7 @@
 # For license information, please see license.txt
 import json
 import re
+from html import escape
 from urllib.parse import urlparse, parse_qs
 import requests
 import frappe
@@ -21,10 +22,157 @@ from whatsapp_evolution.whatsapp_evolution.providers import EvolutionProvider
 
 LEDGER_BALANCE_ALIASES = {"ledger_balance", "_ledger_balance", "ledger balance"}
 ITEMS_TEXT_ALIASES = {"custom_wa_items", "wa_items", "items_list", "invoice_items_list"}
+ENTITY_LABEL_DOCTYPES = {"Customer", "Supplier", "User", "Employee", "Contact", "Lead", "Prospect"}
 
 
 def _get_template_text(template_doc):
     return (template_doc.get("template_message") or template_doc.get("template") or "").strip()
+
+
+def _get_entity_display_name(doctype, docname):
+    if not doctype or not docname:
+        return ""
+    if not frappe.db.exists(doctype, docname):
+        return str(docname)
+
+    try:
+        meta = frappe.get_meta(doctype)
+    except Exception:
+        return str(docname)
+
+    title_field = (meta.title_field or "").strip()
+    if title_field:
+        value = frappe.db.get_value(doctype, docname, title_field)
+        if value:
+            return str(value)
+
+    fallback_fields = {
+        "Customer": ("customer_name",),
+        "Supplier": ("supplier_name",),
+        "User": ("full_name", "username"),
+        "Employee": ("employee_name",),
+        "Contact": ("full_name", "first_name"),
+        "Lead": ("lead_name",),
+        "Prospect": ("company_name", "prospect_name"),
+    }
+    for fieldname in fallback_fields.get(doctype, ()):
+        value = frappe.db.get_value(doctype, docname, fieldname)
+        if value:
+            return str(value)
+
+    if doctype == "Contact":
+        first_name, last_name = frappe.db.get_value(doctype, docname, ["first_name", "last_name"]) or (None, None)
+        full = " ".join([p for p in [first_name, last_name] if p]).strip()
+        if full:
+            return full
+
+    return str(docname)
+
+
+def _build_reference_label(reference_doctype, reference_name):
+    if not reference_doctype or not reference_name:
+        return ""
+
+    if reference_doctype in ENTITY_LABEL_DOCTYPES:
+        return f"{reference_doctype}: {_get_entity_display_name(reference_doctype, reference_name)}"
+
+    try:
+        meta = frappe.get_meta(reference_doctype)
+    except Exception:
+        return f"{reference_doctype}: {reference_name}"
+
+    # Preferred link fields for common business documents.
+    for fieldname in (
+        "customer",
+        "supplier",
+        "employee",
+        "user",
+        "contact",
+        "contact_person",
+        "party",
+        "lead",
+        "prospect",
+        "owner",
+    ):
+        df = meta.get_field(fieldname)
+        if not df:
+            continue
+        value = frappe.db.get_value(reference_doctype, reference_name, fieldname)
+        if not value:
+            continue
+        if df.fieldtype == "Link" and df.options in ENTITY_LABEL_DOCTYPES:
+            display = _get_entity_display_name(df.options, value)
+            return f"{df.options}: {display}"
+        if fieldname == "party":
+            party_type = frappe.db.get_value(reference_doctype, reference_name, "party_type")
+            if party_type in ENTITY_LABEL_DOCTYPES:
+                display = _get_entity_display_name(party_type, value)
+                return f"{party_type}: {display}"
+        if fieldname == "owner":
+            return f"User: {_get_entity_display_name('User', value)}"
+        return f"{fieldname.replace('_', ' ').title()}: {value}"
+
+    return f"{reference_doctype}: {reference_name}"
+
+
+def _contact_display_name(contact_name):
+    if not contact_name or not frappe.db.exists("Contact", contact_name):
+        return ""
+    full_name = frappe.db.get_value("Contact", contact_name, "full_name")
+    if full_name:
+        return str(full_name)
+    first_name, last_name = frappe.db.get_value("Contact", contact_name, ["first_name", "last_name"]) or (None, None)
+    fallback = " ".join([part for part in [first_name, last_name] if part]).strip()
+    return fallback or str(contact_name)
+
+
+def _find_linked_contact_name(reference_doctype, reference_name, phone_number=None):
+    links, direct_contacts = _collect_reference_links(reference_doctype, reference_name)
+
+    contact_names = []
+    if reference_doctype == "Contact" and frappe.db.exists("Contact", reference_name):
+        contact_names.append(reference_name)
+
+    for cname in direct_contacts:
+        if cname and cname not in contact_names:
+            contact_names.append(cname)
+
+    for link_doctype, link_name in sorted(links):
+        linked_contacts = frappe.get_all(
+            "Dynamic Link",
+            filters={
+                "link_doctype": link_doctype,
+                "link_name": link_name,
+                "parenttype": "Contact",
+            },
+            pluck="parent",
+        )
+        for cname in linked_contacts:
+            if cname not in contact_names:
+                contact_names.append(cname)
+
+    if not contact_names:
+        return ""
+
+    normalized_target = re.sub(r"\D", "", str(phone_number or ""))
+
+    for contact_name in contact_names:
+        if not normalized_target:
+            return contact_name
+
+        contact = frappe.get_doc("Contact", contact_name)
+        candidates = []
+        candidates.extend([contact.get("mobile_no"), contact.get("phone")])
+        for row in contact.get("phone_nos") or []:
+            candidates.append(row.get("phone"))
+
+        for candidate in candidates:
+            normalized_candidate = re.sub(r"\D", "", str(candidate or ""))
+            if normalized_candidate and normalized_candidate == normalized_target:
+                return contact_name
+
+    # No exact phone match, still return first linked contact for context.
+    return contact_names[0]
 
 
 def _parse_body_param(body_param):
@@ -380,6 +528,22 @@ def _recent_duplicate_exists(
 
 
 class WhatsAppMessage(Document):
+    def autoname(self):
+        self.set_label()
+        base = (self.label or self.reference_name or self.to or self.get("from") or "whatsapp-message").strip()
+        slug = re.sub(r"[^a-z0-9]+", "-", frappe.scrub(base).lower()).strip("-")
+        if not slug:
+            slug = "whatsapp-message"
+        slug = slug[:60]
+
+        for _ in range(6):
+            candidate = f"{slug}-{frappe.generate_hash(length=6)}"
+            if not frappe.db.exists("WhatsApp Message", candidate):
+                self.name = candidate
+                return
+
+        self.name = f"{slug}-{frappe.generate_hash(length=10)}"
+
     def _allow_attachment_link_fallback(self):
         mode = (frappe.db.get_single_value("WhatsApp Settings", "attachment_delivery_mode") or "").strip()
         if not mode:
@@ -391,16 +555,50 @@ class WhatsAppMessage(Document):
 
     def validate(self):
         self.set_whatsapp_account()
+        self.set_label()
+
+    def set_label(self):
+        if (self.label or "").strip():
+            return
+
+        if self.reference_doctype and self.reference_name:
+            number_for_match = self.to if self.type == "Outgoing" else self.get("from")
+            contact_name = _find_linked_contact_name(
+                self.reference_doctype,
+                self.reference_name,
+                number_for_match,
+            )
+            contact_display = _contact_display_name(contact_name)
+            if contact_display:
+                self.label = f"Contact: {contact_display}"
+                return
+
+        reference_label = _build_reference_label(self.reference_doctype, self.reference_name)
+        if reference_label:
+            self.label = reference_label
+            return
+
+        if self.type == "Incoming":
+            from_number = format_number(self.get("from") or "")
+            if self.profile_name and from_number:
+                self.label = f"{self.profile_name} ({from_number})"
+            elif self.profile_name:
+                self.label = self.profile_name
+            elif from_number:
+                self.label = f"Phone: {from_number}"
+            return
+
+        to_number = format_number(self.to or "")
+        if to_number:
+            self.label = f"Phone: {to_number}"
 
     def after_insert(self):
-        # We only create communication for non-queued messages
-        # Queued messages create communication after they are actually sent
-        if self.status != "Queued":
-            self.create_communication()
+        # Timeline entries are rendered directly from WhatsApp Message docs.
+        return
 
     def on_update(self):
         self.update_profile_name()
-        self.update_communication()
+        return
 
     def update_profile_name(self):
         number = self.get("from")
@@ -778,87 +976,12 @@ class WhatsAppMessage(Document):
         return number
 
     def create_communication(self):
-        if not self.reference_doctype or not self.reference_name:
-            return
-
-        # Don't create Communication for Queued placeholders — no real message yet
-        if self.status in ("Queued", "Started", "Skipped"):
-            return
-
-        # Double-check for duplicate communication records
-        existing_comm = frappe.db.get_value("Communication", {"link_doctype": "WhatsApp Message", "link_name": self.name})
-        if existing_comm:
-            frappe.logger().debug(f"WhatsApp Evolution: Communication already exists for {self.name}: {existing_comm}")
-            return
-            
-        frappe.logger().debug(f"WhatsApp Evolution: Creating communication for {self.name} (Status: {self.status})")
-
-        content = self.message or ""
-        if self.attach:
-            # Add attachment link to content for timeline visibility
-            link = self.attach
-            if not link.startswith("http"):
-                link = frappe.utils.get_url(self.attach)
-            content += f"<br><br><a href='{link}' target='_blank'><b>{_('View Attachment')}</b></a>"
-
-        subject = _("WhatsApp Outgoing") if self.type == "Outgoing" else _("WhatsApp Incoming")
-        if self.template:
-            subject += f" ({self.template})"
-
-        def _to_internal_email(value):
-            raw = (value or "").strip()
-            if not raw:
-                raw = "whatsapp"
-            if "@" in raw:
-                return raw
-            # Keep synthetic local-part RFC-friendly for Frappe email validation.
-            local = re.sub(r"[^A-Za-z0-9._+-]", "_", raw).strip("._")
-            if not local:
-                local = "whatsapp"
-            return f"{local}@whatsapp.local"
-
-        sender_internal = (self.whatsapp_account if self.type == "Outgoing" else self.profile_name or self.get("from")) or "whatsapp"
-        sender_email = _to_internal_email(sender_internal)
-
-        recipient_internal = (self.to if self.type == "Outgoing" else self.whatsapp_account) or "whatsapp"
-        recipient_email = _to_internal_email(recipient_internal)
-
-        comm = frappe.get_doc({
-            "doctype": "Communication",
-            "communication_type": "Communication",
-            "communication_medium": "WhatsApp",
-            "subject": subject,
-            "content": content,
-            "sender": sender_email,
-            "sender_full_name": sender_internal,
-            "recipients": recipient_email,
-            "reference_doctype": self.reference_doctype,
-            "reference_name": self.reference_name,
-            "link_doctype": "WhatsApp Message",
-            "link_name": self.name,
-            "sent_or_received": "Sent" if self.type == "Outgoing" else "Received",
-        })
-        comm.flags.ignore_validate = True
-        comm.insert(ignore_permissions=True)
+        # Deprecated: we now render timeline directly from WhatsApp Message.
+        return
 
     def update_communication(self):
-        if not self.has_value_changed("status") and not self.has_value_changed("message_id"):
-            return
-            
-        comm_name = frappe.db.get_value("Communication", {"link_doctype": "WhatsApp Message", "link_name": self.name})
-        if comm_name:
-            status_map = {
-                "Sent": "Sent",
-                "Delivered": "Delivered",
-                "Read": "Read",
-                "Failed": "Error",
-                "Queued": "Scheduled"
-            }
-            comm = frappe.get_doc("Communication", comm_name)
-            comm.delivery_status = status_map.get(self.status, "Sent")
-            comm.message_id = self.message_id
-            comm.flags.ignore_validate = True
-            comm.save(ignore_permissions=True)
+        # Deprecated: we now render timeline directly from WhatsApp Message.
+        return
 
     @frappe.whitelist()
     def send_read_receipt(self):
@@ -1009,8 +1132,6 @@ def send_template_now(
             sent_doc.before_insert()
             sent_doc.db_update()
         
-        # Create timeline Communication after confirmed send
-        sent_doc.create_communication()
         _update_queue_status(
             queued_message_name,
             "Success",
@@ -1146,9 +1267,6 @@ def send_custom_now(
             sent_doc.before_insert()
             sent_doc.db_update()
 
-        # Create Communication now that send is confirmed
-        sent_doc.create_communication()
-        
         _update_queue_status(
             queued_message_name,
             "Success",
@@ -1365,3 +1483,72 @@ def get_default_contact_and_whatsapp_number(reference_doctype, reference_name):
             }
 
     return {}
+
+
+def get_whatsapp_timeline_content(doctype, docname):
+    if not doctype or not docname or not frappe.db.table_exists("WhatsApp Message"):
+        return []
+
+    rows = frappe.get_all(
+        "WhatsApp Message",
+        filters={
+            "reference_doctype": doctype,
+            "reference_name": docname,
+            "status": ["not in", ["Queued", "Started"]],
+        },
+        fields=[
+            "name",
+            "creation",
+            "type",
+            "to",
+            "from",
+            "message",
+            "status",
+            "template",
+            "attach",
+        ],
+        order_by="creation desc",
+        limit=50,
+    )
+
+    out = []
+    for row in rows:
+        row_type = row.get("type") or ""
+        phone = row.get("to") if row_type == "Outgoing" else row.get("from")
+        direction = _("Sent") if row_type == "Outgoing" else _("Received")
+        status = row.get("status") or ""
+        message = (row.get("message") or "").strip()
+
+        if not message and row.get("template"):
+            message = _("Template: {0}").format(row.get("template"))
+        if not message and row.get("attach"):
+            message = _("Attachment sent")
+        if not message:
+            message = _("WhatsApp message")
+        if len(message) > 320:
+            message = f"{message[:317]}..."
+
+        doc_url = frappe.utils.get_url_to_form("WhatsApp Message", row.get("name"))
+        status_html = (
+            f"<span class='wa-timeline-status wa-status-{escape(status.lower())}'>{escape(status)}</span>"
+            if status
+            else ""
+        )
+        content = (
+            "<div class='wa-timeline-item'>"
+            f"<div class='wa-timeline-head'><a href='{doc_url}'>{escape(row.get('name') or '')}</a>"
+            f" · {escape(direction)} · {escape(format_number(phone or ''))} {status_html}</div>"
+            f"<div class='wa-timeline-message'>{escape(message)}</div>"
+            "</div>"
+        )
+        out.append(
+            {
+                "doctype": "WhatsApp Message",
+                "name": row.get("name"),
+                "creation": row.get("creation"),
+                "icon": "message-circle",
+                "icon_size": "sm",
+                "content": content,
+            }
+        )
+    return out
