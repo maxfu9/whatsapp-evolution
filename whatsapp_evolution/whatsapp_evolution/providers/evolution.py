@@ -369,6 +369,45 @@ def _find_message_name_by_id(message_id):
     return rows[0] if rows else None
 
 
+def _digits(value):
+    return "".join(ch for ch in str(value or "") if ch.isdigit())
+
+
+def _numbers_match(a, b):
+    da, db = _digits(a), _digits(b)
+    if not da or not db:
+        return False
+    if da == db:
+        return True
+    # Handle local/international variants (e.g. 0331... vs 92331...)
+    return da.endswith(db[-10:]) or db.endswith(da[-10:])
+
+
+def _find_recent_outgoing_by_number(remote_jid, instance_name=None):
+    number = (remote_jid or "").split("@")[0]
+    if not number:
+        return None
+
+    rows = frappe.get_all(
+        "WhatsApp Message",
+        filters={
+            "type": "Outgoing",
+            "creation": [">=", frappe.utils.add_to_date(frappe.utils.now_datetime(), hours=-24)],
+        },
+        fields=["name", "status", "to", "whatsapp_account", "creation"],
+        order_by="creation desc",
+        limit_page_length=80,
+    )
+
+    candidates = [r for r in rows if _numbers_match(r.get("to"), number)]
+    if instance_name:
+        inst_candidates = [r for r in candidates if (r.get("whatsapp_account") or "") == instance_name]
+        if inst_candidates:
+            candidates = inst_candidates
+
+    return candidates[0] if candidates else None
+
+
 def _log_webhook_debug(payload):
     try:
         frappe.logger("whatsapp_evolution.webhook").info(json.dumps(payload, ensure_ascii=False))
@@ -450,6 +489,12 @@ def handle_webhook():
         key_data = (data.get("data") or {}).get("key") if isinstance(data.get("data"), dict) else {}
         remote_jid = (key_data or {}).get("remoteJid")
         from_me = (key_data or {}).get("fromMe")
+        instance_name = (
+            data.get("instance")
+            or data.get("instanceName")
+            or data.get("instance_name")
+            or ((data.get("data") or {}).get("instance") if isinstance(data.get("data"), dict) else None)
+        )
         status_text = _map_evolution_status(status_code)
 
         _log_webhook_debug(
@@ -465,7 +510,10 @@ def handle_webhook():
 
         if message_id and status_code is not None:
             if status_text:
-                found = _find_message_name_by_id(message_id)
+                found_by_id = _find_message_name_by_id(message_id)
+                found = found_by_id
+                if not found and remote_jid:
+                    found = _find_recent_outgoing_by_number(remote_jid, instance_name=instance_name)
                 if found and _status_rank(status_text) >= _status_rank(found.get("status")):
                     frappe.db.set_value("WhatsApp Message", found.get("name"), "status", status_text)
                     _log_webhook_debug(
@@ -475,6 +523,7 @@ def handle_webhook():
                             "docname": found.get("name"),
                             "previous_status": found.get("status"),
                             "new_status": status_text,
+                            "fallback_by_number": bool(not found_by_id and remote_jid),
                         }
                     )
                 else:
