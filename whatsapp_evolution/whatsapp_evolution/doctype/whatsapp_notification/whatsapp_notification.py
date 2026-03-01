@@ -766,10 +766,18 @@ class WhatsAppNotification(Document):
         # Auto notifications should only use Contact rows with explicit
         # Notification consent checkbox enabled.
 
-        # 5. System Users (Roles/Assignees) are always authorized via their System Profile
-        sys_numbers = self._get_system_user_numbers(doc, doc_data)
-        for num in sys_numbers:
-            numbers.extend(_split_candidate_numbers(num))
+        # 5. System users are included only when explicitly configured.
+        include_system_users = bool(getattr(self, "send_to_all_assignees", 0))
+        if not include_system_users and getattr(self, "recipients", None):
+            include_system_users = any(
+                (r.get("receiver_by_role") or r.get("receiver_by_document_field"))
+                for r in self.recipients
+            )
+
+        if include_system_users:
+            sys_numbers = self._get_system_user_numbers(doc, doc_data)
+            for num in sys_numbers:
+                numbers.extend(_split_candidate_numbers(num))
 
         return _dedupe_numbers(numbers)
 
@@ -1064,53 +1072,4 @@ def send_template_message_job(
         ignore_condition=ignore_condition,
         from_queue=True,
     )
-
-
-def send_assignment_notification_on_todo_create(doc, event=None):
-    """Send WhatsApp notifications when a new assignment (ToDo) is created."""
-    if not doc or doc.doctype != "ToDo":
-        return
-
-    reference_doctype = doc.get("reference_type")
-    reference_name = doc.get("reference_name")
-    allocated_to = doc.get("allocated_to")
-
-    if not (reference_doctype and reference_name and allocated_to):
-        return
-
-    if not frappe.db.exists(reference_doctype, reference_name):
-        return
-
-    # Resolve assigned user's phone.
-    phone_no = frappe.db.get_value("User", allocated_to, "mobile_no") or frappe.db.get_value(
-        "User", allocated_to, "phone"
-    )
-    if not _looks_like_phone(phone_no):
-        return
-
-    # Trigger all enabled notifications configured for this doctype
-    # that explicitly allow assignee sending.
-    notification_names = frappe.get_all(
-        "WhatsApp Notification",
-        filters={
-            "disabled": 0,
-            "notification_type": "DocType Event",
-            "reference_doctype": reference_doctype,
-            "send_to_all_assignees": 1,
-        },
-        pluck="name",
-    )
-    if not notification_names:
-        return
-
-    ref_doc = frappe.get_doc(reference_doctype, reference_name)
-    for notification_name in notification_names:
-        try:
-            notification = frappe.get_doc("WhatsApp Notification", notification_name)
-            notification.send_template_message(ref_doc, phone_no=phone_no)
-        except Exception:
-            frappe.log_error(
-                frappe.get_traceback(),
-                f"WhatsApp assignment notification failed: {notification_name}",
-            )
            
