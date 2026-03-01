@@ -368,6 +368,13 @@ def _find_message_name_by_id(message_id):
     )
     return rows[0] if rows else None
 
+
+def _log_webhook_debug(payload):
+    try:
+        frappe.logger("whatsapp_evolution.webhook").info(json.dumps(payload, ensure_ascii=False))
+    except Exception:
+        pass
+
     def test_connection(self):
         """Check API reachability and instance session status."""
         if not self.api_base:
@@ -440,12 +447,64 @@ def handle_webhook():
     elif event_type == "messages.update":
         status_code = msg.get("status")
         message_id = msg.get("message_id")
+        key_data = (data.get("data") or {}).get("key") if isinstance(data.get("data"), dict) else {}
+        remote_jid = (key_data or {}).get("remoteJid")
+        from_me = (key_data or {}).get("fromMe")
+        status_text = _map_evolution_status(status_code)
+
+        _log_webhook_debug(
+            {
+                "event": "messages.update.received",
+                "message_id": message_id,
+                "status_raw": status_code,
+                "status_mapped": status_text,
+                "remote_jid": remote_jid,
+                "from_me": from_me,
+            }
+        )
 
         if message_id and status_code is not None:
-            status_text = _map_evolution_status(status_code)
             if status_text:
                 found = _find_message_name_by_id(message_id)
                 if found and _status_rank(status_text) >= _status_rank(found.get("status")):
                     frappe.db.set_value("WhatsApp Message", found.get("name"), "status", status_text)
+                    _log_webhook_debug(
+                        {
+                            "event": "messages.update.applied",
+                            "message_id": message_id,
+                            "docname": found.get("name"),
+                            "previous_status": found.get("status"),
+                            "new_status": status_text,
+                        }
+                    )
+                else:
+                    _log_webhook_debug(
+                        {
+                            "event": "messages.update.skipped",
+                            "reason": "no_match_or_lower_rank",
+                            "message_id": message_id,
+                            "status_mapped": status_text,
+                            "matched_doc": found.get("name") if found else None,
+                            "current_status": found.get("status") if found else None,
+                        }
+                    )
+            else:
+                _log_webhook_debug(
+                    {
+                        "event": "messages.update.skipped",
+                        "reason": "unmapped_status",
+                        "message_id": message_id,
+                        "status_raw": status_code,
+                    }
+                )
+        else:
+            _log_webhook_debug(
+                {
+                    "event": "messages.update.skipped",
+                    "reason": "missing_message_id_or_status",
+                    "message_id": message_id,
+                    "status_raw": status_code,
+                }
+            )
 
     return "OK"
