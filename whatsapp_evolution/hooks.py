@@ -16,6 +16,12 @@ app_include_js = [
     "/assets/whatsapp_evolution/js/whatsapp_evolution.js",
     "/assets/whatsapp_evolution/js/whatsapp_timeline.js"
 ]
+
+additional_timeline_content = {
+    "*": [
+        "whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_message.whatsapp_message.get_whatsapp_timeline_content"
+    ]
+}
 # app_include_js = ["whatsapp_evolution.js"]
 
 # include js, css files in header of web template
