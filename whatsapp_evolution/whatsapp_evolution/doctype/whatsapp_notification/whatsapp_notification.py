@@ -706,6 +706,9 @@ class WhatsAppNotification(Document):
         numbers = []
         if phone_no and frappe.db.exists("Contact", phone_no):
             numbers.extend(_get_contact_numbers(phone_no, purpose="notification"))
+        elif phone_no and _looks_like_phone(phone_no):
+            # Keep support for explicit scheduler-provided numbers in _data_list.
+            numbers.extend(_split_candidate_numbers(phone_no))
 
         val_doctype = getattr(doc, "doctype", None)
         val_name = getattr(doc, "name", None)
@@ -718,9 +721,9 @@ class WhatsAppNotification(Document):
             numbers.extend(_get_contact_numbers(val_name, purpose="notification"))
 
         if val_doctype in ("Customer", "Supplier", "Lead", "Prospect") and val_name:
-            has_links = frappe.db.exists("Dynamic Link", {"link_doctype": val_doctype, "link_name": val_name, "parenttype": "Contact"})
-            if has_links:
-                numbers.extend(_get_dynamic_link_contact_numbers(val_doctype, val_name, purpose="notification"))
+            numbers.extend(
+                _get_dynamic_link_contact_numbers(val_doctype, val_name, purpose="notification")
+            )
 
         # 2. Handle Explicit Field Selection
         if self.field_name:
@@ -747,17 +750,17 @@ class WhatsAppNotification(Document):
         party_type = doc_data.get("party_type")
         party = doc_data.get("party")
         if party_type and party:
-            has_links = frappe.db.exists("Dynamic Link", {"link_doctype": party_type, "link_name": party, "parenttype": "Contact"})
-            if has_links:
-                numbers.extend(_get_dynamic_link_contact_numbers(party_type, party, purpose="notification"))
+            numbers.extend(
+                _get_dynamic_link_contact_numbers(party_type, party, purpose="notification")
+            )
 
         for linked_dt_field in ("customer", "supplier", "lead", "prospect"):
             linked_name = doc_data.get(linked_dt_field)
             if linked_name:
                 linked_dt = linked_dt_field.title()
-                has_links = frappe.db.exists("Dynamic Link", {"link_doctype": linked_dt, "link_name": linked_name, "parenttype": "Contact"})
-                if has_links:
-                    numbers.extend(_get_dynamic_link_contact_numbers(linked_dt, linked_name, purpose="notification"))
+                numbers.extend(
+                    _get_dynamic_link_contact_numbers(linked_dt, linked_name, purpose="notification")
+                )
 
         # 4. No raw mobile fallback:
         # Auto notifications should only use Contact rows with explicit
@@ -816,18 +819,17 @@ class WhatsAppNotification(Document):
     def _get_user_info(self, users, field="mobile_no"):
         if not users:
             return []
-        numbers = frappe.get_all(
+        user_names = [u for u in set(users) if u]
+        rows = frappe.get_all(
             "User",
-            filters={"name": ["in", users], "enabled": 1},
-            pluck=field
+            filters={"name": ["in", user_names], "enabled": 1},
+            fields=[field, "phone"],
         )
-        phone_numbers = frappe.get_all(
-            "User",
-            filters={"name": ["in", users], "enabled": 1},
-            pluck="phone"
-        )
-        all_nums = [n for n in (numbers + phone_numbers) if n]
-        return list(set(all_nums))
+        all_nums = []
+        for row in rows:
+            all_nums.extend(_split_candidate_numbers(row.get(field)))
+            all_nums.extend(_split_candidate_numbers(row.get("phone")))
+        return _dedupe_numbers(all_nums)
 
     def notify(self, data, doc_data=None, template_account=None):
         """Notify."""
@@ -1015,11 +1017,11 @@ def call_trigger_notifications():
     try:
         # Directly call the trigger_notifications function
         trigger_notifications()  
-    except Exception as e:
+    except Exception:
         # Log the error but do not show any popup or alert
         frappe.log_error(frappe.get_traceback(), "Error in call_trigger_notifications")
         # Optionally, you could raise the exception to be handled elsewhere if needed
-        raise e
+        raise
 
 def trigger_notifications(method="daily"):
     if frappe.flags.in_import or frappe.flags.in_patch:

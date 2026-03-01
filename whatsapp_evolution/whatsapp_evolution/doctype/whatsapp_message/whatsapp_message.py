@@ -1013,7 +1013,7 @@ def send_template_now(
         if queued_message_name:
             frappe.log_error(frappe.get_traceback(), "WhatsApp Template Send Failed")
             return {"queued": False, "status": "Failed", "error": str(e)}
-        raise e
+        raise
 
 
 @frappe.whitelist()
@@ -1151,7 +1151,7 @@ def send_custom_now(
         if queued_message_name:
             frappe.log_error(frappe.get_traceback(), "WhatsApp Custom Send Failed")
             return {"queued": False, "status": "Failed", "error": str(e)}
-        raise e
+        raise
 
 
 @frappe.whitelist()
@@ -1193,26 +1193,7 @@ def get_linked_contacts_query(doctype, txt, searchfield, start, page_len, filter
     if not reference_doctype or not reference_name:
         return []
 
-    links = {(reference_doctype, reference_name)}
-    try:
-        ref_doc = frappe.get_doc(reference_doctype, reference_name)
-        # Directly linked contact on the source doc.
-        contact_person = ref_doc.get("contact_person")
-        if contact_person:
-            links.add(("Contact", contact_person))
-
-        # Generic party links used by docs like Payment Entry.
-        party_type = ref_doc.get("party_type")
-        party = ref_doc.get("party")
-        if party_type and party:
-            links.add((party_type, party))
-
-        for field in ("customer", "supplier", "lead", "prospect"):
-            value = ref_doc.get(field)
-            if value:
-                links.add((field.title(), value))
-    except Exception:
-        pass
+    links, _ = _collect_reference_links(reference_doctype, reference_name)
 
     conditions = []
     values = {
@@ -1293,6 +1274,33 @@ def get_authorized_whatsapp_numbers(reference_doctype, reference_name, primary_o
     return _dedupe_numbers(numbers)
 
 
+def _collect_reference_links(reference_doctype, reference_name):
+    """Collect link tuples and direct contact names from a reference document."""
+    links = {(reference_doctype, reference_name)}
+    direct_contacts = []
+    try:
+        ref_doc = frappe.get_doc(reference_doctype, reference_name)
+
+        for contact_field in ("contact_person", "contact", "supplier_contact", "customer_contact"):
+            contact_name = ref_doc.get(contact_field)
+            if contact_name:
+                links.add(("Contact", contact_name))
+                direct_contacts.append(contact_name)
+
+        party_type = ref_doc.get("party_type")
+        party = ref_doc.get("party")
+        if party_type and party:
+            links.add((party_type, party))
+
+        for field in ("customer", "supplier", "lead", "prospect"):
+            value = ref_doc.get(field)
+            if value:
+                links.add((field.title(), value))
+    except Exception:
+        pass
+    return links, direct_contacts
+
+
 @frappe.whitelist()
 def get_default_contact_and_whatsapp_number(reference_doctype, reference_name):
     """Return first linked contact and strict primary WhatsApp number."""
@@ -1300,28 +1308,21 @@ def get_default_contact_and_whatsapp_number(reference_doctype, reference_name):
         _get_contact_numbers,
     )
 
-    links = {(reference_doctype, reference_name)}
-    try:
-        ref_doc = frappe.get_doc(reference_doctype, reference_name)
-        for contact_field in ("contact_person", "contact", "supplier_contact", "customer_contact"):
-            contact_name = ref_doc.get(contact_field)
-            if contact_name and frappe.db.exists("Contact", contact_name):
-                numbers = _get_contact_numbers(
-                    contact_name,
-                    purpose="whatsapp",
-                    primary_only=1,
-                )
-                if numbers:
-                    return {
-                        "contact": contact_name,
-                        "mobile_no": numbers[0],
-                    }
-        for field in ("customer", "supplier", "lead", "prospect"):
-            value = ref_doc.get(field)
-            if value:
-                links.add((field.title(), value))
-    except Exception:
-        pass
+    links, direct_contacts = _collect_reference_links(reference_doctype, reference_name)
+
+    for contact_name in direct_contacts:
+        if not frappe.db.exists("Contact", contact_name):
+            continue
+        numbers = _get_contact_numbers(
+            contact_name,
+            purpose="whatsapp",
+            primary_only=1,
+        )
+        if numbers:
+            return {
+                "contact": contact_name,
+                "mobile_no": numbers[0],
+            }
 
     contact_names = []
     if reference_doctype == "Contact" and frappe.db.exists("Contact", reference_name):
