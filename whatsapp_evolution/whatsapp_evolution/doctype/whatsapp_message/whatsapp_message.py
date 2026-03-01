@@ -617,6 +617,8 @@ class WhatsAppMessage(Document):
 
     def create_whatsapp_profile(self):
         number = format_number(self.get("from") or self.to)
+        if not number:
+            return
         if not frappe.db.exists("WhatsApp Profiles", {"number": number}):
             frappe.get_doc({
                 "doctype": "WhatsApp Profiles",
