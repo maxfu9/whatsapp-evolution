@@ -256,6 +256,8 @@ class EvolutionProvider(BaseProvider):
     def parse_incoming(self, data):
         event = data.get("event")
         payload = data.get("data") or {}
+        if isinstance(payload, list):
+            payload = payload[0] if payload else {}
 
         if event == "messages.upsert":
             message = payload.get("message") or {}
@@ -289,7 +291,7 @@ class EvolutionProvider(BaseProvider):
             key = payload.get("key") or {}
             update = payload.get("update") or {}
             status = update.get("status")
-            
+
             return {
                 "event": event,
                 "message_id": key.get("id"),
@@ -299,6 +301,72 @@ class EvolutionProvider(BaseProvider):
             }
 
         return {"event": event}
+
+
+def _status_rank(status_text):
+    order = {"Success": 1, "Sent": 1, "Delivered": 2, "Read": 3, "Played": 4}
+    return order.get(status_text or "", 0)
+
+
+def _map_evolution_status(status_value):
+    if status_value is None:
+        return None
+
+    if isinstance(status_value, str):
+        raw = status_value.strip()
+        if not raw:
+            return None
+        if raw.isdigit():
+            status_value = int(raw)
+        else:
+            text = raw.upper()
+            if text in {"PENDING", "SERVER_ACK", "SENT", "ACK", "1"}:
+                return "Sent"
+            if text in {"DELIVERY_ACK", "DELIVERED", "2"}:
+                return "Delivered"
+            if text in {"READ", "READ_ACK", "3"}:
+                return "Read"
+            if text in {"PLAYED", "4"}:
+                return "Played"
+            return None
+
+    if isinstance(status_value, (int, float)):
+        status_map = {
+            0: "Sent",
+            1: "Sent",
+            2: "Delivered",
+            3: "Read",
+            4: "Played",
+        }
+        return status_map.get(int(status_value))
+
+    return None
+
+
+def _message_id_candidates(message_id):
+    raw = (message_id or "").strip()
+    if not raw:
+        return []
+    variants = {raw}
+    if raw.startswith("wamid."):
+        variants.add(raw.replace("wamid.", "", 1))
+    else:
+        variants.add(f"wamid.{raw}")
+    return list(variants)
+
+
+def _find_message_name_by_id(message_id):
+    candidates = _message_id_candidates(message_id)
+    if not candidates:
+        return None
+    rows = frappe.get_all(
+        "WhatsApp Message",
+        filters={"message_id": ["in", candidates]},
+        fields=["name", "status"],
+        order_by="modified desc",
+        limit_page_length=1,
+    )
+    return rows[0] if rows else None
 
     def test_connection(self):
         """Check API reachability and instance session status."""
@@ -361,7 +429,9 @@ def handle_webhook():
         if msg.get("is_from_me"):
             # Update outgoing message status if we find it by ID
             if msg.get("message_id"):
-                frappe.db.set_value("WhatsApp Message", {"message_id": msg.get("message_id")}, "status", "Sent")
+                found = _find_message_name_by_id(msg.get("message_id"))
+                if found and _status_rank("Sent") >= _status_rank(found.get("status")):
+                    frappe.db.set_value("WhatsApp Message", found.get("name"), "status", "Sent")
             return "OK"
             
         from whatsapp_evolution.incoming import handle_incoming_message
@@ -370,19 +440,12 @@ def handle_webhook():
     elif event_type == "messages.update":
         status_code = msg.get("status")
         message_id = msg.get("message_id")
-        
+
         if message_id and status_code is not None:
-            # Map Evolution ACK levels
-            # 2 = Delivered (Two Ticks)
-            # 3 = Read (Two Blue Ticks)
-            status_map = {
-                1: "Sent",
-                2: "Delivered",
-                3: "Read",
-                4: "Played"
-            }
-            status_text = status_map.get(status_code)
+            status_text = _map_evolution_status(status_code)
             if status_text:
-                frappe.db.set_value("WhatsApp Message", {"message_id": message_id}, "status", status_text)
+                found = _find_message_name_by_id(message_id)
+                if found and _status_rank(status_text) >= _status_rank(found.get("status")):
+                    frappe.db.set_value("WhatsApp Message", found.get("name"), "status", status_text)
 
     return "OK"
