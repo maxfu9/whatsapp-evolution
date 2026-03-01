@@ -265,6 +265,55 @@ def _insert_notification_log(template, error=None, response=None):
     ).insert(ignore_permissions=True)
 
 
+def _is_user_recipient_field(reference_doctype, fieldname):
+    if not fieldname:
+        return False
+    if fieldname == "owner":
+        return True
+    try:
+        meta = frappe.get_meta(reference_doctype)
+        df = meta.get_field(fieldname)
+    except Exception:
+        return False
+    return bool(df and df.fieldtype == "Link" and df.options == "User")
+
+
+def _is_party_recipient_role(role_name):
+    return role_name in ("Customer", "Supplier", "Lead", "Prospect", "Contact")
+
+
+def _get_party_role_numbers(doc_data, role_name):
+    numbers = []
+    candidates = set()
+
+    if role_name == "Contact":
+        for field in ("contact_person", "contact", "supplier_contact", "customer_contact"):
+            value = doc_data.get(field)
+            if value:
+                candidates.add(value)
+    else:
+        # Standard direct link field (customer/supplier/lead/prospect)
+        value = doc_data.get(role_name.lower())
+        if value:
+            candidates.add(value)
+        # Generic party_type/party mapping (e.g. Payment Entry / Journal Entry flows)
+        if doc_data.get("party_type") == role_name and doc_data.get("party"):
+            candidates.add(doc_data.get("party"))
+
+    for name in candidates:
+        if role_name == "Contact":
+            numbers.extend(_get_contact_numbers(name, purpose="notification"))
+        else:
+            numbers.extend(
+                _get_dynamic_link_contact_numbers(
+                    role_name,
+                    name,
+                    purpose="notification",
+                )
+            )
+    return _dedupe_numbers(numbers)
+
+
 def _get_ledger_balance_value(doc):
     try:
         from erpnext.accounts.utils import get_balance_on
@@ -710,67 +759,67 @@ class WhatsAppNotification(Document):
             # Keep support for explicit scheduler-provided numbers in _data_list.
             numbers.extend(_split_candidate_numbers(phone_no))
 
-        val_doctype = getattr(doc, "doctype", None)
-        val_name = getattr(doc, "name", None)
-
-        # Sensitivity Check: Determine if this is an entity where we must be strict about authorization
-        is_sensitive_entity = val_doctype in ("Customer", "Supplier", "Lead", "Prospect", "Contact")
-
-        # 1. Handle Direct Contact or Linked Entity
-        if val_doctype == "Contact" and val_name:
-            numbers.extend(_get_contact_numbers(val_name, purpose="notification"))
-
-        if val_doctype in ("Customer", "Supplier", "Lead", "Prospect") and val_name:
-            numbers.extend(
-                _get_dynamic_link_contact_numbers(val_doctype, val_name, purpose="notification")
-            )
-
-        # 2. Handle Explicit Field Selection
+        # 1. Handle Explicit Field Selection only
         if self.field_name:
             value = doc_data.get(self.field_name)
-            # For sensitive entities, we only allow field_name if it resolves to a check-marked Contact.
-            # We skip adding the raw value directly at this stage if is_sensitive_entity is True.
-            if not is_sensitive_entity:
-                numbers.extend(_split_candidate_numbers(value))
-
+            numbers.extend(_split_candidate_numbers(value))
             if value and frappe.db.exists("Contact", value):
                 numbers.extend(_get_contact_numbers(value, purpose="notification"))
-            elif is_sensitive_entity and _looks_like_phone(value):
-                # If it's a phone number string in a sensitive doc's field, we do NOT add it unless unauthorized fallback is okay.
-                # Per user request: "Only sent to those whose... check in contact list".
-                # However, if explicitly chosen in field_name, some legacy users might expect it.
-                # But to be safe and follow the request "Sensitive information", we stay strict.
-                pass
 
-        # 3. Handle Other Linked Contact Fields
-        contact_person = doc_data.get("contact_person")
-        if contact_person and frappe.db.exists("Contact", contact_person):
-            numbers.extend(_get_contact_numbers(contact_person, purpose="notification"))
+        # 2. Handle recipient table document fields that are not user fields
+        # (e.g. custom phone field, customer/supplier/contact link field).
+        if getattr(self, "recipients", None):
+            for recipient in self.recipients:
+                if recipient.get("condition"):
+                    if not frappe.safe_eval(
+                        recipient.get("condition"),
+                        get_safe_globals(),
+                        dict(doc=doc_data),
+                    ):
+                        continue
 
-        party_type = doc_data.get("party_type")
-        party = doc_data.get("party")
-        if party_type and party:
-            numbers.extend(
-                _get_dynamic_link_contact_numbers(party_type, party, purpose="notification")
-            )
+                role_name = recipient.get("receiver_by_role")
+                if role_name and _is_party_recipient_role(role_name):
+                    numbers.extend(_get_party_role_numbers(doc_data, role_name))
 
-        for linked_dt_field in ("customer", "supplier", "lead", "prospect"):
-            linked_name = doc_data.get(linked_dt_field)
-            if linked_name:
-                linked_dt = linked_dt_field.title()
-                numbers.extend(
-                    _get_dynamic_link_contact_numbers(linked_dt, linked_name, purpose="notification")
-                )
+                fieldname = recipient.get("receiver_by_document_field")
+                if not fieldname or _is_user_recipient_field(doc_data.get("doctype"), fieldname):
+                    continue
+                value = doc_data.get(fieldname)
+                if not value:
+                    continue
+                if frappe.db.exists("Contact", value):
+                    numbers.extend(_get_contact_numbers(value, purpose="notification"))
+                    continue
+                if _looks_like_phone(value):
+                    numbers.extend(_split_candidate_numbers(value))
+                    continue
+                for linked_dt in ("Customer", "Supplier", "Lead", "Prospect"):
+                    if frappe.db.exists(linked_dt, value):
+                        numbers.extend(
+                            _get_dynamic_link_contact_numbers(
+                                linked_dt,
+                                value,
+                                purpose="notification",
+                            )
+                        )
+                        break
 
-        # 4. No raw mobile fallback:
+        # 3. No implicit linked-contact fallback:
         # Auto notifications should only use Contact rows with explicit
-        # Notification consent checkbox enabled.
+        # Notification consent checkbox enabled and explicitly configured source fields.
 
-        # 5. System users are included only when explicitly configured.
+        # 4. System users are included only when explicitly configured.
         include_system_users = bool(getattr(self, "send_to_all_assignees", 0))
         if not include_system_users and getattr(self, "recipients", None):
             include_system_users = any(
-                (r.get("receiver_by_role") or r.get("receiver_by_document_field"))
+                (
+                    (r.get("receiver_by_role") and not _is_party_recipient_role(r.get("receiver_by_role")))
+                    or _is_user_recipient_field(
+                        doc_data.get("doctype"),
+                        r.get("receiver_by_document_field"),
+                    )
+                )
                 for r in self.recipients
             )
 
@@ -808,20 +857,22 @@ class WhatsAppNotification(Document):
                 # For sending messages to the owner's mobile phone number
                 if recipient.get("receiver_by_document_field") == "owner":
                     receiver_list.extend(self._get_user_info([doc_data.get("owner")], "mobile_no"))
-                # For sending messages to the number specified in the receiver field (if it is a user link)
-                elif recipient.get("receiver_by_document_field"):
+                # For sending messages to user-link fields only.
+                elif _is_user_recipient_field(
+                    doc_data.get("doctype"),
+                    recipient.get("receiver_by_document_field"),
+                ):
                     val = doc_data.get(recipient.get("receiver_by_document_field"))
                     if val and frappe.db.exists("User", val):
                         receiver_list.extend(self._get_user_info([val], "mobile_no"))
-                    elif val:
-                        # Support direct number fields on source docs.
-                        receiver_list.extend(_split_candidate_numbers(val))
 
                 # For sending messages to specified role
                 if recipient.get("receiver_by_role"):
-                    roles = frappe.get_all("Has Role", filters={"role": recipient.get("receiver_by_role")}, pluck="parent")
-                    if roles:
-                        receiver_list.extend(self._get_user_info(roles, "mobile_no"))
+                    role_name = recipient.get("receiver_by_role")
+                    if not _is_party_recipient_role(role_name):
+                        roles = frappe.get_all("Has Role", filters={"role": role_name}, pluck="parent")
+                        if roles:
+                            receiver_list.extend(self._get_user_info(roles, "mobile_no"))
                         
         return receiver_list
 
