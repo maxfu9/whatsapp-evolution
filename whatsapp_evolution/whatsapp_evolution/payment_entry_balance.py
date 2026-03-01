@@ -15,43 +15,76 @@ def _get_party_ledger_after(doc):
 
     posting_date = doc.get("posting_date") or frappe.utils.nowdate()
 
-    account = None
-    if doc.get("party_type") == "Customer":
-        account = doc.get("paid_from")
-    elif doc.get("party_type") in ("Supplier", "Employee"):
-        account = doc.get("paid_to")
-
-    if not account:
-        account = doc.get("party_account")
-
-    if not account:
-        try:
-            from erpnext.accounts.party import get_party_account
-            account = get_party_account(
-                doc.get("party_type"),
-                doc.get("party"),
-                doc.get("company"),
-            )
-        except Exception:
-            account = None
-
-    if not account:
-        return 0.0
-
     try:
         return flt(
             get_balance_on(
-                account=account,
                 date=posting_date,
                 party_type=doc.get("party_type"),
                 party=doc.get("party"),
                 company=doc.get("company"),
             )
         )
-    except TypeError:
-        return flt(get_balance_on(account=account, date=posting_date))
     except Exception:
+        # Fallback to explicit account resolution for older/variant setups.
+        account = None
+        if doc.get("party_type") == "Customer":
+            account = doc.get("paid_from")
+        elif doc.get("party_type") in ("Supplier", "Employee"):
+            account = doc.get("paid_to")
+
+        if not account:
+            account = doc.get("party_account")
+
+        if not account:
+            try:
+                from erpnext.accounts.party import get_party_account
+                account = get_party_account(
+                    doc.get("party_type"),
+                    doc.get("party"),
+                    doc.get("company"),
+                )
+            except Exception:
+                account = None
+
+        if not account:
+            return 0.0
+
+        try:
+            return flt(
+                get_balance_on(
+                    account=account,
+                    date=posting_date,
+                    party_type=doc.get("party_type"),
+                    party=doc.get("party"),
+                    company=doc.get("company"),
+                )
+            )
+        except TypeError:
+            return flt(get_balance_on(account=account, date=posting_date))
+        except Exception:
+            return 0.0
+
+
+def _get_party_gl_effect_for_payment_entry(doc):
+    if doc.doctype != "Payment Entry" or not doc.get("name"):
         return 0.0
+    if not doc.get("party_type") or not doc.get("party") or not doc.get("company"):
+        return 0.0
+
+    value = frappe.db.sql(
+        """
+        select ifnull(sum(debit - credit), 0)
+        from `tabGL Entry`
+        where voucher_type='Payment Entry'
+          and voucher_no=%s
+          and company=%s
+          and party_type=%s
+          and party=%s
+          and ifnull(is_cancelled, 0)=0
+        """,
+        (doc.name, doc.get("company"), doc.get("party_type"), doc.get("party")),
+    )
+    return flt((value or [[0]])[0][0])
 
 
 def _get_payment_effect_amount(doc):
@@ -91,13 +124,16 @@ def update_payment_entry_whatsapp_balances(doc, event=None):
     if doc.get("docstatus") == 2:
         return
 
-    delta = _get_outstanding_delta(doc)
     current_balance = _get_party_ledger_after(doc)
 
     if doc.get("docstatus") == 1:
+        delta = _get_party_gl_effect_for_payment_entry(doc)
+        if not delta:
+            delta = _get_outstanding_delta(doc)
         after_balance = current_balance
         before_balance = after_balance - delta
     else:
+        delta = _get_outstanding_delta(doc)
         before_balance = current_balance
         after_balance = before_balance + delta
 
