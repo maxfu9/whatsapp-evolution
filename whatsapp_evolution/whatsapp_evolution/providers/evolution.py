@@ -414,6 +414,13 @@ def _log_webhook_debug(payload):
     except Exception:
         pass
 
+
+def _normalize_webhook_data(data):
+    payload = data.get("data") or {}
+    if isinstance(payload, list):
+        return payload[0] if payload else {}
+    return payload if isinstance(payload, dict) else {}
+
     def test_connection(self):
         """Check API reachability and instance session status."""
         if not self.api_base:
@@ -470,6 +477,7 @@ def handle_webhook():
 
     provider = EvolutionProvider(frappe.get_single("WhatsApp Settings").as_dict())
     msg = provider.parse_incoming(data)
+    payload_data = _normalize_webhook_data(data)
     
     if event_type == "messages.upsert":
         if msg.get("is_from_me"):
@@ -486,14 +494,14 @@ def handle_webhook():
     elif event_type == "messages.update":
         status_code = msg.get("status")
         message_id = msg.get("message_id")
-        key_data = (data.get("data") or {}).get("key") if isinstance(data.get("data"), dict) else {}
+        key_data = payload_data.get("key") if isinstance(payload_data, dict) else {}
         remote_jid = (key_data or {}).get("remoteJid")
         from_me = (key_data or {}).get("fromMe")
         instance_name = (
             data.get("instance")
             or data.get("instanceName")
             or data.get("instance_name")
-            or ((data.get("data") or {}).get("instance") if isinstance(data.get("data"), dict) else None)
+            or (payload_data.get("instance") if isinstance(payload_data, dict) else None)
         )
         status_text = _map_evolution_status(status_code)
 
