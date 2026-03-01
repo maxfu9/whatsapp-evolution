@@ -18,11 +18,22 @@ def _get_party_ledger_after(doc):
     account = None
     if doc.get("party_type") == "Customer":
         account = doc.get("paid_from")
-    elif doc.get("party_type") == "Supplier":
+    elif doc.get("party_type") in ("Supplier", "Employee"):
         account = doc.get("paid_to")
 
     if not account:
         account = doc.get("party_account")
+
+    if not account:
+        try:
+            from erpnext.accounts.party import get_party_account
+            account = get_party_account(
+                doc.get("party_type"),
+                doc.get("party"),
+                doc.get("company"),
+            )
+        except Exception:
+            account = None
 
     if not account:
         return 0.0
