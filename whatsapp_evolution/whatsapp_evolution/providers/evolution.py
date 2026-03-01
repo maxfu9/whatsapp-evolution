@@ -262,45 +262,104 @@ class EvolutionProvider(BaseProvider):
         if event == "messages.upsert":
             message = payload.get("message") or {}
             key = payload.get("key") or {}
-            
+
             # Extract number
-            sender = key.get("remoteJid") or ""
+            sender = (
+                key.get("remoteJid")
+                or key.get("participant")
+                or payload.get("remoteJid")
+                or payload.get("participant")
+                or ""
+            )
             if "@" in sender:
                 sender = sender.split("@")[0]
-            
+
             # Extract text
             text = (
-                message.get("conversation") 
+                message.get("conversation")
                 or (message.get("extendedTextMessage") or {}).get("text")
                 or (message.get("imageMessage") or {}).get("caption")
                 or (message.get("videoMessage") or {}).get("caption")
                 or ""
             )
-            
+
             return {
                 "event": event,
                 "from": sender,
                 "body": text,
                 "message_id": key.get("id"),
                 "timestamp": payload.get("messageTimestamp"),
-                "is_from_me": key.get("fromMe", False)
+                "is_from_me": key.get("fromMe", False),
             }
-            
+
         elif event == "messages.update":
             # Status update (ACK)
             key = payload.get("key") or {}
             update = payload.get("update") or {}
-            status = update.get("status")
+            status = (
+                update.get("status")
+                if isinstance(update, dict)
+                else None
+            )
+            if status is None and isinstance(update, dict):
+                status = (update.get("message") or {}).get("status")
+            if status is None:
+                status = payload.get("status")
+            if status is None:
+                status = (payload.get("statusMessage") or {}).get("status")
 
             return {
                 "event": event,
-                "message_id": key.get("id"),
+                "message_id": key.get("id") or payload.get("id"),
                 "status": status,
-                "to": (key.get("remoteJid") or "").split("@")[0],
-                "is_from_me": key.get("fromMe", True)
+                "to": (key.get("remoteJid") or payload.get("remoteJid") or "").split("@")[0],
+                "is_from_me": key.get("fromMe", True),
             }
 
         return {"event": event}
+
+    def test_connection(self):
+        """Check API reachability and instance session status."""
+        if not self.api_base:
+            return {"ok": False, "status": "error", "message": "Missing Evolution API Base"}
+        if not self.token:
+            return {"ok": False, "status": "error", "message": "Missing Evolution API Token"}
+        if not self.instance:
+            return {"ok": False, "status": "error", "message": "Missing Evolution Instance on WhatsApp Account"}
+
+        urls = [
+            self._build_url(f"/instance/connectionState/{self.instance}"),
+            self._build_url(f"/instance/connection-state/{self.instance}"),
+            self._build_url(f"/instance/fetchInstances"),
+        ]
+        last_error = ""
+        for url in urls:
+            try:
+                response = requests.get(url, headers=self._headers(), timeout=20)
+                if response.status_code == 404:
+                    last_error = f"{url} -> 404"
+                    continue
+                response.raise_for_status()
+                body = {}
+                try:
+                    body = response.json() or {}
+                except Exception:
+                    body = {}
+
+                session_error = self._extract_session_error(response)
+                if session_error:
+                    return {"ok": False, "status": "disconnected", "message": session_error, "url": url}
+
+                raw = json.dumps(body, ensure_ascii=False).lower()
+                if any(k in raw for k in ("open", "connected", "online")):
+                    return {"ok": True, "status": "connected", "url": url, "data": body}
+                if any(k in raw for k in ("close", "closed", "disconnected", "offline")):
+                    return {"ok": False, "status": "disconnected", "url": url, "data": body}
+                return {"ok": True, "status": "reachable", "url": url, "data": body}
+            except Exception as e:
+                last_error = f"{url} -> {str(e)}"
+
+        return {"ok": False, "status": "error", "message": last_error or "Unable to reach Evolution API"}
 
 
 def _status_rank(status_text):
@@ -421,48 +480,20 @@ def _normalize_webhook_data(data):
         return payload[0] if payload else {}
     return payload if isinstance(payload, dict) else {}
 
-    def test_connection(self):
-        """Check API reachability and instance session status."""
-        if not self.api_base:
-            return {"ok": False, "status": "error", "message": "Missing Evolution API Base"}
-        if not self.token:
-            return {"ok": False, "status": "error", "message": "Missing Evolution API Token"}
-        if not self.instance:
-            return {"ok": False, "status": "error", "message": "Missing Evolution Instance on WhatsApp Account"}
 
-        urls = [
-            self._build_url(f"/instance/connectionState/{self.instance}"),
-            self._build_url(f"/instance/connection-state/{self.instance}"),
-            self._build_url(f"/instance/fetchInstances"),
-        ]
-        last_error = ""
-        for url in urls:
-            try:
-                response = requests.get(url, headers=self._headers(), timeout=20)
-                if response.status_code == 404:
-                    last_error = f"{url} -> 404"
-                    continue
-                response.raise_for_status()
-                body = {}
-                try:
-                    body = response.json() or {}
-                except Exception:
-                    body = {}
-
-                session_error = self._extract_session_error(response)
-                if session_error:
-                    return {"ok": False, "status": "disconnected", "message": session_error, "url": url}
-
-                raw = json.dumps(body, ensure_ascii=False).lower()
-                if any(k in raw for k in ("open", "connected", "online")):
-                    return {"ok": True, "status": "connected", "url": url, "data": body}
-                if any(k in raw for k in ("close", "closed", "disconnected", "offline")):
-                    return {"ok": False, "status": "disconnected", "url": url, "data": body}
-                return {"ok": True, "status": "reachable", "url": url, "data": body}
-            except Exception as e:
-                last_error = f"{url} -> {str(e)}"
-
-        return {"ok": False, "status": "error", "message": last_error or "Unable to reach Evolution API"}
+def _extract_instance_name(data, payload_data):
+    if not isinstance(data, dict):
+        data = {}
+    if not isinstance(payload_data, dict):
+        payload_data = {}
+    return (
+        data.get("instance")
+        or data.get("instanceName")
+        or data.get("instance_name")
+        or payload_data.get("instance")
+        or payload_data.get("instanceName")
+        or payload_data.get("instance_name")
+    )
 
 
 @frappe.whitelist(allow_guest=True)
@@ -497,12 +528,11 @@ def handle_webhook():
         key_data = payload_data.get("key") if isinstance(payload_data, dict) else {}
         remote_jid = (key_data or {}).get("remoteJid")
         from_me = (key_data or {}).get("fromMe")
-        instance_name = (
-            data.get("instance")
-            or data.get("instanceName")
-            or data.get("instance_name")
-            or (payload_data.get("instance") if isinstance(payload_data, dict) else None)
-        )
+        if not remote_jid:
+            remote_jid = msg.get("to")
+            if remote_jid and "@" not in remote_jid:
+                remote_jid = f"{remote_jid}@s.whatsapp.net"
+        instance_name = _extract_instance_name(data, payload_data)
         status_text = _map_evolution_status(status_code)
 
         _log_webhook_debug(
@@ -516,9 +546,9 @@ def handle_webhook():
             }
         )
 
-        if message_id and status_code is not None:
+        if status_code is not None:
             if status_text:
-                found_by_id = _find_message_name_by_id(message_id)
+                found_by_id = _find_message_name_by_id(message_id) if message_id else None
                 found = found_by_id
                 if not found and remote_jid:
                     found = _find_recent_outgoing_by_number(remote_jid, instance_name=instance_name)

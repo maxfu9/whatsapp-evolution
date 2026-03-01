@@ -200,21 +200,47 @@ def _extract_response_message_id(response):
     if not isinstance(response, dict):
         return ""
 
-    msg_id = response.get("id") or response.get("message_id")
-    if msg_id:
-        return str(msg_id)
+    def _pick_id(payload):
+        if not isinstance(payload, dict):
+            return ""
+        msg_id = payload.get("id") or payload.get("message_id")
+        if msg_id:
+            return str(msg_id)
 
-    key = response.get("key") or {}
-    if isinstance(key, dict) and key.get("id"):
-        return str(key.get("id"))
+        key = payload.get("key") or {}
+        if isinstance(key, dict) and key.get("id"):
+            return str(key.get("id"))
 
-    messages = response.get("messages") or []
-    if isinstance(messages, list) and messages:
-        first = messages[0] or {}
-        if isinstance(first, dict):
-            mid = first.get("id") or ((first.get("key") or {}).get("id") if isinstance(first.get("key"), dict) else None)
-            if mid:
-                return str(mid)
+        status_data = payload.get("status") or {}
+        if isinstance(status_data, dict):
+            nested_key = status_data.get("key") or {}
+            if isinstance(nested_key, dict) and nested_key.get("id"):
+                return str(nested_key.get("id"))
+
+        messages = payload.get("messages") or []
+        if isinstance(messages, list) and messages:
+            first = messages[0] or {}
+            if isinstance(first, dict):
+                mid = first.get("id") or ((first.get("key") or {}).get("id") if isinstance(first.get("key"), dict) else None)
+                if mid:
+                    return str(mid)
+
+        return ""
+
+    direct = _pick_id(response)
+    if direct:
+        return direct
+
+    data = response.get("data")
+    if isinstance(data, list):
+        for item in data:
+            nested = _pick_id(item)
+            if nested:
+                return nested
+    elif isinstance(data, dict):
+        nested = _pick_id(data)
+        if nested:
+            return nested
 
     return ""
 
@@ -1537,6 +1563,13 @@ def get_whatsapp_timeline_content(doctype, docname):
     )
 
     out = []
+    tick_map = {
+        "Sent": "✓",
+        "Success": "✓",
+        "Delivered": "✓✓",
+        "Read": "✓✓",
+        "Played": "✓✓",
+    }
     for row in rows:
         row_type = row.get("type") or ""
         phone = row.get("to") if row_type == "Outgoing" else row.get("from")
@@ -1555,7 +1588,7 @@ def get_whatsapp_timeline_content(doctype, docname):
 
         doc_url = frappe.utils.get_url_to_form("WhatsApp Message", row.get("name"))
         status_html = (
-            f"<span class='wa-timeline-status wa-status-{escape(status.lower())}'>{escape(status)}</span>"
+            f"<span class='wa-timeline-status wa-status-{escape(status.lower())}'>{escape(status)} {escape(tick_map.get(status, ''))}</span>"
             if status
             else ""
         )
