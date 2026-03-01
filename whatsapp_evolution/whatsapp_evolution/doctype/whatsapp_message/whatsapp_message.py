@@ -1252,19 +1252,94 @@ def get_linked_contacts_query(doctype, txt, searchfield, start, page_len, filter
         values,
     )
 @frappe.whitelist()
-def get_authorized_whatsapp_numbers(reference_doctype, reference_name):
+def get_authorized_whatsapp_numbers(reference_doctype, reference_name, primary_only=0):
     from whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_notification.whatsapp_notification import (
         _get_dynamic_link_contact_numbers,
         _get_contact_numbers,
     )
+    primary_only = frappe.utils.cint(primary_only)
     
     # 1. Direct Dynamic Links (strict)
-    numbers = _get_dynamic_link_contact_numbers(reference_doctype, reference_name, purpose="whatsapp")
+    numbers = _get_dynamic_link_contact_numbers(
+        reference_doctype,
+        reference_name,
+        purpose="whatsapp",
+        primary_only=primary_only,
+    )
     
     # 2. Check document fields if it's a Contact
     if reference_doctype == "Contact":
-        numbers.extend(_get_contact_numbers(reference_name, purpose="whatsapp"))
-        
+        numbers.extend(
+            _get_contact_numbers(
+                reference_name,
+                purpose="whatsapp",
+                primary_only=primary_only,
+            )
+        )
+
     # Return deduped list
     from whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_notification.whatsapp_notification import _dedupe_numbers
     return _dedupe_numbers(numbers)
+
+
+@frappe.whitelist()
+def get_default_contact_and_whatsapp_number(reference_doctype, reference_name):
+    """Return first linked contact and strict primary WhatsApp number."""
+    from whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_notification.whatsapp_notification import (
+        _get_contact_numbers,
+    )
+
+    links = {(reference_doctype, reference_name)}
+    try:
+        ref_doc = frappe.get_doc(reference_doctype, reference_name)
+        for contact_field in ("contact_person", "contact", "supplier_contact", "customer_contact"):
+            contact_name = ref_doc.get(contact_field)
+            if contact_name and frappe.db.exists("Contact", contact_name):
+                numbers = _get_contact_numbers(
+                    contact_name,
+                    purpose="whatsapp",
+                    primary_only=1,
+                )
+                if numbers:
+                    return {
+                        "contact": contact_name,
+                        "mobile_no": numbers[0],
+                    }
+        for field in ("customer", "supplier", "lead", "prospect"):
+            value = ref_doc.get(field)
+            if value:
+                links.add((field.title(), value))
+    except Exception:
+        pass
+
+    contact_names = []
+    if reference_doctype == "Contact" and frappe.db.exists("Contact", reference_name):
+        contact_names.append(reference_name)
+
+    for link_doctype, link_name in sorted(links):
+        linked_contacts = frappe.get_all(
+            "Dynamic Link",
+            filters={
+                "link_doctype": link_doctype,
+                "link_name": link_name,
+                "parenttype": "Contact",
+            },
+            pluck="parent",
+        )
+        for contact_name in linked_contacts:
+            if contact_name not in contact_names:
+                contact_names.append(contact_name)
+
+    for contact_name in contact_names:
+        numbers = _get_contact_numbers(
+            contact_name,
+            purpose="whatsapp",
+            primary_only=1,
+        )
+        if numbers:
+            return {
+                "contact": contact_name,
+                "mobile_no": numbers[0],
+            }
+
+    return {}
