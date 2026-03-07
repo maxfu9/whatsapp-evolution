@@ -10,6 +10,7 @@ from frappe import _, throw
 from frappe.model.document import Document
 from frappe.desk.search import sanitize_searchfield
 from frappe.integrations.utils import make_post_request  # Backward-compat for legacy tests that patch this symbol.
+from frappe.utils.file_manager import get_file
 
 from whatsapp_evolution.utils import (
     get_whatsapp_account,
@@ -344,9 +345,24 @@ def _get_ledger_balance_value(doc):
     account = None
     party_type = doc.get("party_type")
     party = doc.get("party")
-    company = doc.get("company")
+    company = (
+        doc.get("company")
+        or doc.get("default_company")
+        or frappe.defaults.get_user_default("Company")
+        or frappe.db.get_single_value("Global Defaults", "default_company")
+    )
     posting_date = doc.get("posting_date") or doc.get("transaction_date") or frappe.utils.nowdate()
     payment_type = doc.get("payment_type")
+
+    if doc.doctype in ("Customer", "Supplier", "Employee"):
+        party_type = doc.doctype
+        party = doc.get("name")
+        if company and party:
+            try:
+                from erpnext.accounts.party import get_party_account
+                account = get_party_account(party_type, party, company)
+            except Exception:
+                account = None
 
     if doc.doctype == "Payment Entry":
         if payment_type == "Receive":
@@ -386,11 +402,36 @@ def _get_ledger_balance_value(doc):
     except Exception:
         return None
 
-    currency = doc.get("party_account_currency") or doc.get("paid_from_account_currency") or doc.get("paid_to_account_currency") or doc.get("currency")
+    currency = (
+        doc.get("party_account_currency")
+        or doc.get("paid_from_account_currency")
+        or doc.get("paid_to_account_currency")
+        or doc.get("default_currency")
+        or doc.get("currency")
+        or (frappe.db.get_value("Company", company, "default_currency") if company else None)
+    )
     try:
-        return frappe.utils.fmt_money(balance, currency=currency) if currency else frappe.utils.fmt_money(balance)
+        return _format_amount_no_symbol(balance)
     except Exception:
         return str(balance)
+
+
+def _format_amount_no_symbol(value):
+    amount = frappe.utils.flt(value or 0)
+    return f"{amount:,.2f}"
+
+
+def _render_named_placeholders(text, ref_doc):
+    if not text:
+        return ""
+
+    def _replace(match):
+        key = (match.group(1) or "").strip()
+        if not key or key.isdigit():
+            return match.group(0)
+        return _resolve_template_value(ref_doc, key)
+
+    return re.sub(r"{{\s*([^{}]+?)\s*}}", _replace, text)
 
 
 def _resolve_template_value(ref_doc, field_name):
@@ -405,6 +446,16 @@ def _resolve_template_value(ref_doc, field_name):
         value = _get_items_text_value(ref_doc)
         if value is not None:
             return str(value)
+    try:
+        meta = frappe.get_meta(ref_doc.doctype)
+        df = meta.get_field(key) if meta else None
+        if df and df.fieldtype == "Currency":
+            raw_value = ref_doc.get(key)
+            if raw_value in (None, ""):
+                return ""
+            return _format_amount_no_symbol(raw_value)
+    except Exception:
+        pass
     try:
         return str(ref_doc.get_formatted(key) or "")
     except Exception:
@@ -430,7 +481,7 @@ def _get_items_text_value(doc):
         chunks.append(
             "---------------------------\n"
             f"🔹 *نام:* {item_name}\n"
-            f"   *تعداد:* {qty:g} {uom} × *قیمت:* {frappe.utils.fmt_money(rate)} = *کل:* {frappe.utils.fmt_money(amount)}"
+            f"   *تعداد:* {qty:g} {uom} × *قیمت:* {_format_amount_no_symbol(rate)} = *کل:* {_format_amount_no_symbol(amount)}"
         )
     chunks.append("---------------------------")
     return "\n".join(chunks)
@@ -989,6 +1040,20 @@ class WhatsAppMessage(Document):
                         media_bytes = None
                         media_filename = None
 
+            # For File attachments (/files or /private/files), upload bytes directly.
+            if (
+                not media_bytes
+                and self.attach
+                and isinstance(self.attach, str)
+                and (self.attach.startswith("/files/") or self.attach.startswith("/private/files/"))
+            ):
+                try:
+                    media_filename, content = get_file(self.attach)
+                    media_bytes = content.encode() if isinstance(content, str) else content
+                except Exception:
+                    media_bytes = None
+                    media_filename = None
+
             # Prefer byte upload when available to avoid Evolution DNS issues on site1.local.
             if media_bytes:
                 file_url = ""
@@ -1126,6 +1191,9 @@ def send_template_now(
             reference_name=reference_name,
         )
         rendered_text = (message or preview.get("rendered_text") or preview.get("template_text") or "").strip()
+        if reference_doctype and reference_name and rendered_text:
+            ref_doc = frappe.get_doc(reference_doctype, reference_name)
+            rendered_text = _render_named_placeholders(rendered_text, ref_doc)
 
         send_attach = attach
         if not send_attach and frappe.utils.cint(attach_document_print):
@@ -1260,6 +1328,9 @@ def send_custom_now(
     _update_queue_status(queued_message_name, "Started")
     try:
         actual_content_type = content_type or "text"
+        if reference_doctype and reference_name and (message or "").strip():
+            ref_doc = frappe.get_doc(reference_doctype, reference_name)
+            message = _render_named_placeholders(message, ref_doc)
         if not attach and frappe.utils.cint(attach_document_print):
             key = frappe.get_doc(reference_doctype, reference_name).get_document_share_key()
             fmt = _resolve_print_format(reference_doctype, print_format)
@@ -1357,9 +1428,14 @@ def get_template_preview(template, reference_doctype=None, reference_name=None, 
             value = fallback_values[index - 1] if index - 1 < len(fallback_values) else ""
             params.append(str(value or ""))
 
+    rendered_text = _render_template_text(template_text, params)
+    if reference_doctype and reference_name:
+        ref_doc = frappe.get_doc(reference_doctype, reference_name)
+        rendered_text = _render_named_placeholders(rendered_text, ref_doc)
+
     return {
         "template_text": template_text,
-        "rendered_text": _render_template_text(template_text, params),
+        "rendered_text": rendered_text,
         "params": params,
     }
 
@@ -1471,13 +1547,31 @@ def _collect_reference_links(reference_doctype, reference_name):
         if party_type and party:
             links.add((party_type, party))
 
-        for field in ("customer", "supplier", "lead", "prospect"):
+        for field in ("customer", "supplier", "lead", "prospect", "employee"):
             value = ref_doc.get(field)
             if value:
                 links.add((field.title(), value))
     except Exception:
         pass
     return links, direct_contacts
+
+
+def _get_employee_mobile(employee_name):
+    if not employee_name or not frappe.db.exists("Employee", employee_name):
+        return ""
+    try:
+        meta = frappe.get_meta("Employee")
+    except Exception:
+        return ""
+    candidates = []
+    for fieldname in ("cell_number", "personal_mobile_no", "personal_mobile", "mobile_no"):
+        if meta.get_field(fieldname):
+            candidates.append(frappe.db.get_value("Employee", employee_name, fieldname))
+    for raw in candidates:
+        digits = re.sub(r"\D", "", str(raw or ""))
+        if digits:
+            return str(raw)
+    return ""
 
 
 @frappe.whitelist()
@@ -1532,6 +1626,18 @@ def get_default_contact_and_whatsapp_number(reference_doctype, reference_name):
                 "contact": contact_name,
                 "mobile_no": numbers[0],
             }
+
+    # Employee fallback for docs with party_type=Employee or employee link.
+    if reference_doctype == "Employee":
+        emp_mobile = _get_employee_mobile(reference_name)
+        if emp_mobile:
+            return {"mobile_no": emp_mobile}
+
+    for link_doctype, link_name in sorted(links):
+        if link_doctype == "Employee":
+            emp_mobile = _get_employee_mobile(link_name)
+            if emp_mobile:
+                return {"mobile_no": emp_mobile}
 
     return {}
 

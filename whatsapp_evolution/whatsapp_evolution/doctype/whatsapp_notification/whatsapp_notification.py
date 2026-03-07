@@ -254,6 +254,31 @@ def _get_dynamic_link_contact_numbers(link_doctype, link_name, purpose="notifica
     return _dedupe_numbers(numbers)
 
 
+def _get_employee_fallback_numbers(employee_name):
+    if not employee_name or not frappe.db.exists("Employee", employee_name):
+        return []
+    try:
+        meta = frappe.get_meta("Employee")
+    except Exception:
+        return []
+
+    candidate_fields = []
+    for fieldname in ("cell_number", "personal_mobile_no", "personal_mobile", "mobile_no"):
+        if meta.get_field(fieldname):
+            candidate_fields.append(fieldname)
+    if not candidate_fields:
+        return []
+
+    values = frappe.db.get_value("Employee", employee_name, candidate_fields)
+    if not isinstance(values, (list, tuple)):
+        values = (values,)
+
+    out = []
+    for value in values:
+        out.extend(_split_candidate_numbers(value))
+    return _dedupe_numbers(out)
+
+
 def _insert_notification_log(template, error=None, response=None):
     meta = {"error": error} if error else {"response": response or {}}
     frappe.get_doc(
@@ -367,9 +392,14 @@ def _get_ledger_balance_value(doc):
 
     currency = doc.get("party_account_currency") or doc.get("paid_from_account_currency") or doc.get("paid_to_account_currency") or doc.get("currency")
     try:
-        return frappe.utils.fmt_money(balance, currency=currency) if currency else frappe.utils.fmt_money(balance)
+        return _format_amount_no_symbol(balance)
     except Exception:
         return str(balance)
+
+
+def _format_amount_no_symbol(value):
+    amount = frappe.utils.flt(value or 0)
+    return f"{amount:,.2f}"
 
 
 def _resolve_template_param_value(doc, fieldname):
@@ -386,6 +416,16 @@ def _resolve_template_param_value(doc, fieldname):
         value = _get_items_text_value(doc)
         if value is not None:
             return value
+    try:
+        meta = frappe.get_meta(doc.doctype)
+        df = meta.get_field(fieldname) if meta else None
+        if df and df.fieldtype == "Currency":
+            raw_value = doc.get(fieldname)
+            if raw_value in (None, ""):
+                return ""
+            return _format_amount_no_symbol(raw_value)
+    except Exception:
+        pass
 
     try:
         return doc.get_formatted(fieldname)
@@ -416,7 +456,7 @@ def _get_items_text_value(doc):
         chunks.append(
             "---------------------------\n"
             f"🔹 *نام:* {item_name}\n"
-            f"   *تعداد:* {qty:g} {uom} × *قیمت:* {frappe.utils.fmt_money(rate)} = *کل:* {frappe.utils.fmt_money(amount)}"
+            f"   *تعداد:* {qty:g} {uom} × *قیمت:* {_format_amount_no_symbol(rate)} = *کل:* {_format_amount_no_symbol(amount)}"
         )
     chunks.append("---------------------------")
     return "\n".join(chunks)
@@ -884,15 +924,32 @@ class WhatsAppNotification(Document):
         if not users:
             return []
         user_names = [u for u in set(users) if u]
+        user_meta = frappe.get_meta("User")
+        has_employee_field = bool(user_meta.get_field("employee"))
+        fields = [field, "phone"]
+        if has_employee_field:
+            fields.append("employee")
         rows = frappe.get_all(
             "User",
             filters={"name": ["in", user_names], "enabled": 1},
-            fields=[field, "phone"],
+            fields=fields,
         )
         all_nums = []
         for row in rows:
             all_nums.extend(_split_candidate_numbers(row.get(field)))
             all_nums.extend(_split_candidate_numbers(row.get("phone")))
+            employee = row.get("employee") if has_employee_field else None
+            if employee:
+                contact_numbers = _get_dynamic_link_contact_numbers(
+                    "Employee",
+                    employee,
+                    purpose="notification",
+                    primary_only=False,
+                )
+                if contact_numbers:
+                    all_nums.extend(contact_numbers)
+                else:
+                    all_nums.extend(_get_employee_fallback_numbers(employee))
         return _dedupe_numbers(all_nums)
 
     def notify(self, data, doc_data=None, template_account=None):
