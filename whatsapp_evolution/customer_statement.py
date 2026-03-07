@@ -21,11 +21,43 @@ def _get_default_company(customer):
 
 
 def _get_default_outgoing_whatsapp_account():
-    return frappe.db.get_value(
+    rows = frappe.get_all(
         "WhatsApp Account",
-        {"is_default_outgoing": 1, "status": "Active"},
-        "name",
+        filters={"is_default_outgoing": 1, "status": "Active"},
+        fields=["name"],
+        limit_page_length=1,
+        ignore_permissions=True,
     )
+    if rows:
+        return rows[0].get("name")
+
+    rows = frappe.get_all(
+        "WhatsApp Account",
+        filters={"is_default_outgoing": 1},
+        fields=["name"],
+        limit_page_length=1,
+        ignore_permissions=True,
+    )
+    if rows:
+        return rows[0].get("name")
+
+    rows = frappe.get_all(
+        "WhatsApp Account",
+        filters={"status": "Active"},
+        fields=["name"],
+        limit_page_length=1,
+        ignore_permissions=True,
+    )
+    if rows:
+        return rows[0].get("name")
+
+    rows = frappe.get_all(
+        "WhatsApp Account",
+        fields=["name"],
+        limit_page_length=1,
+        ignore_permissions=True,
+    )
+    return rows[0].get("name") if rows else None
 
 
 def _get_customer_mobile(customer):
