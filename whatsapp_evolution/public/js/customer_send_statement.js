@@ -2,9 +2,15 @@ frappe.ui.form.on("Customer", {
 	refresh(frm) {
 		if (frm.is_new()) return;
 
-		frm.add_custom_button(__("Send Statement (WhatsApp)"), () => {
-			open_customer_statement_whatsapp_dialog(frm);
-		}, __("WhatsApp"));
+		frappe.call({
+			method: "whatsapp_evolution.customer_statement.can_send_customer_statement",
+			callback(r) {
+				if (!r.message) return;
+				frm.add_custom_button(__("Send Statement (WhatsApp)"), () => {
+					open_customer_statement_whatsapp_dialog(frm);
+				}, __("WhatsApp"));
+			}
+		});
 	}
 });
 

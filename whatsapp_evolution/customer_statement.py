@@ -3,6 +3,12 @@ from frappe import _
 from frappe.utils import add_months, nowdate
 
 
+def _assert_statement_permission():
+    # Reuse ERPNext permission model: whoever can read Process Statement doc can use this action.
+    if not frappe.has_permission("Process Statement Of Accounts", ptype="read"):
+        frappe.throw(_("You are not permitted to send customer statements on WhatsApp."))
+
+
 def _get_default_company(customer):
     company = frappe.db.get_value("Customer", customer, "default_company")
     if company:
@@ -75,6 +81,7 @@ def _create_statement_file(customer, pdf_bytes, args):
 
 @frappe.whitelist()
 def get_customer_statement_defaults(customer):
+    _assert_statement_permission()
     if not customer:
         frappe.throw(_("Customer is required"))
 
@@ -100,6 +107,11 @@ def get_customer_statement_defaults(customer):
 
 
 @frappe.whitelist()
+def can_send_customer_statement():
+    return bool(frappe.has_permission("Process Statement Of Accounts", ptype="read"))
+
+
+@frappe.whitelist()
 def send_customer_statement_whatsapp(
     customer,
     to,
@@ -121,6 +133,7 @@ def send_customer_statement_whatsapp(
     pdf_name=None,
     whatsapp_account=None,
 ):
+    _assert_statement_permission()
     if not customer:
         frappe.throw(_("Customer is required"))
     if not to:
