@@ -411,9 +411,14 @@ def _get_ledger_balance_value(doc):
         or (frappe.db.get_value("Company", company, "default_currency") if company else None)
     )
     try:
-        return frappe.utils.fmt_money(balance, currency=currency) if currency else frappe.utils.fmt_money(balance)
+        return _format_amount_no_symbol(balance)
     except Exception:
         return str(balance)
+
+
+def _format_amount_no_symbol(value):
+    amount = frappe.utils.flt(value or 0)
+    return f"{amount:,.2f}"
 
 
 def _render_named_placeholders(text, ref_doc):
@@ -466,7 +471,7 @@ def _get_items_text_value(doc):
         chunks.append(
             "---------------------------\n"
             f"🔹 *نام:* {item_name}\n"
-            f"   *تعداد:* {qty:g} {uom} × *قیمت:* {frappe.utils.fmt_money(rate)} = *کل:* {frappe.utils.fmt_money(amount)}"
+            f"   *تعداد:* {qty:g} {uom} × *قیمت:* {_format_amount_no_symbol(rate)} = *کل:* {_format_amount_no_symbol(amount)}"
         )
     chunks.append("---------------------------")
     return "\n".join(chunks)
