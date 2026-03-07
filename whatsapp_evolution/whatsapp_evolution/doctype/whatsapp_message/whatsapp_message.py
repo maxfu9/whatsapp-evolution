@@ -447,6 +447,16 @@ def _resolve_template_value(ref_doc, field_name):
         if value is not None:
             return str(value)
     try:
+        meta = frappe.get_meta(ref_doc.doctype)
+        df = meta.get_field(key) if meta else None
+        if df and df.fieldtype == "Currency":
+            raw_value = ref_doc.get(key)
+            if raw_value in (None, ""):
+                return ""
+            return _format_amount_no_symbol(raw_value)
+    except Exception:
+        pass
+    try:
         return str(ref_doc.get_formatted(key) or "")
     except Exception:
         value = ref_doc.get(key)
