@@ -86,6 +86,7 @@ def _build_statement_doc(customer, args):
     doc.include_ageing = frappe.utils.cint(args.get("include_ageing"))
     doc.ageing_based_on = args.get("ageing_based_on") or "Due Date"
     doc.pdf_name = args.get("pdf_name") or f"{customer}-statement"
+    doc.show_remarks = 1
 
     if doc.report == "Accounts Receivable":
         doc.posting_date = args.get("posting_date") or nowdate()
