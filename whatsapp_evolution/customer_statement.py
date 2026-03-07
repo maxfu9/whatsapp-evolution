@@ -135,6 +135,21 @@ def _create_statement_file(customer, pdf_bytes, args):
     return file_doc.file_url
 
 
+def _validate_template_for_customer(template):
+    if not template:
+        return
+    template_for_doctype = frappe.db.get_value("WhatsApp Templates", template, "for_doctype")
+    if template_for_doctype and template_for_doctype != "Customer":
+        frappe.throw(_("Selected template is not configured for Customer documents."))
+
+
+def _validate_manual_pdf(file_url):
+    if not file_url:
+        return
+    if not file_url.lower().endswith(".pdf"):
+        frappe.throw(_("Uploaded attachment must be a PDF file."))
+
+
 @frappe.whitelist()
 def get_customer_statement_defaults(customer):
     _assert_statement_permission()
@@ -222,6 +237,7 @@ def send_customer_statement_whatsapp(
 
     file_url = ""
     if manual_attach:
+        _validate_manual_pdf(manual_attach)
         file_url = manual_attach
     elif frappe.utils.cint(attach_pdf):
         pdf_bytes = _get_statement_pdf_bytes(customer, args)
@@ -235,6 +251,7 @@ def send_customer_statement_whatsapp(
     if (send_mode or "").strip().lower() == "template":
         if not template:
             frappe.throw(_("Template is required for Template mode"))
+        _validate_template_for_customer(template)
         return send_template(
             to=to,
             reference_doctype="Customer",
