@@ -10,9 +10,11 @@ def _assert_statement_permission():
 
 
 def _get_default_company(customer):
-    company = frappe.db.get_value("Customer", customer, "default_company")
-    if company:
-        return company
+    customer_meta = frappe.get_meta("Customer")
+    if customer_meta and customer_meta.has_field("default_company"):
+        company = frappe.db.get_value("Customer", customer, "default_company")
+        if company:
+            return company
     return frappe.defaults.get_user_default("Company") or frappe.db.get_single_value(
         "Global Defaults", "default_company"
     )
