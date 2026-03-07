@@ -10,6 +10,7 @@ from frappe import _, throw
 from frappe.model.document import Document
 from frappe.desk.search import sanitize_searchfield
 from frappe.integrations.utils import make_post_request  # Backward-compat for legacy tests that patch this symbol.
+from frappe.utils.file_manager import get_file
 
 from whatsapp_evolution.utils import (
     get_whatsapp_account,
@@ -988,6 +989,20 @@ class WhatsAppMessage(Document):
                     except Exception:
                         media_bytes = None
                         media_filename = None
+
+            # For File attachments (/files or /private/files), upload bytes directly.
+            if (
+                not media_bytes
+                and self.attach
+                and isinstance(self.attach, str)
+                and (self.attach.startswith("/files/") or self.attach.startswith("/private/files/"))
+            ):
+                try:
+                    media_filename, content = get_file(self.attach)
+                    media_bytes = content.encode() if isinstance(content, str) else content
+                except Exception:
+                    media_bytes = None
+                    media_filename = None
 
             # Prefer byte upload when available to avoid Evolution DNS issues on site1.local.
             if media_bytes:
