@@ -345,9 +345,24 @@ def _get_ledger_balance_value(doc):
     account = None
     party_type = doc.get("party_type")
     party = doc.get("party")
-    company = doc.get("company")
+    company = (
+        doc.get("company")
+        or doc.get("default_company")
+        or frappe.defaults.get_user_default("Company")
+        or frappe.db.get_single_value("Global Defaults", "default_company")
+    )
     posting_date = doc.get("posting_date") or doc.get("transaction_date") or frappe.utils.nowdate()
     payment_type = doc.get("payment_type")
+
+    if doc.doctype in ("Customer", "Supplier", "Employee"):
+        party_type = doc.doctype
+        party = doc.get("name")
+        if company and party:
+            try:
+                from erpnext.accounts.party import get_party_account
+                account = get_party_account(party_type, party, company)
+            except Exception:
+                account = None
 
     if doc.doctype == "Payment Entry":
         if payment_type == "Receive":
@@ -387,11 +402,31 @@ def _get_ledger_balance_value(doc):
     except Exception:
         return None
 
-    currency = doc.get("party_account_currency") or doc.get("paid_from_account_currency") or doc.get("paid_to_account_currency") or doc.get("currency")
+    currency = (
+        doc.get("party_account_currency")
+        or doc.get("paid_from_account_currency")
+        or doc.get("paid_to_account_currency")
+        or doc.get("default_currency")
+        or doc.get("currency")
+        or (frappe.db.get_value("Company", company, "default_currency") if company else None)
+    )
     try:
         return frappe.utils.fmt_money(balance, currency=currency) if currency else frappe.utils.fmt_money(balance)
     except Exception:
         return str(balance)
+
+
+def _render_named_placeholders(text, ref_doc):
+    if not text:
+        return ""
+
+    def _replace(match):
+        key = (match.group(1) or "").strip()
+        if not key or key.isdigit():
+            return match.group(0)
+        return _resolve_template_value(ref_doc, key)
+
+    return re.sub(r"{{\s*([^{}]+?)\s*}}", _replace, text)
 
 
 def _resolve_template_value(ref_doc, field_name):
@@ -1141,6 +1176,9 @@ def send_template_now(
             reference_name=reference_name,
         )
         rendered_text = (message or preview.get("rendered_text") or preview.get("template_text") or "").strip()
+        if reference_doctype and reference_name and rendered_text:
+            ref_doc = frappe.get_doc(reference_doctype, reference_name)
+            rendered_text = _render_named_placeholders(rendered_text, ref_doc)
 
         send_attach = attach
         if not send_attach and frappe.utils.cint(attach_document_print):
@@ -1275,6 +1313,9 @@ def send_custom_now(
     _update_queue_status(queued_message_name, "Started")
     try:
         actual_content_type = content_type or "text"
+        if reference_doctype and reference_name and (message or "").strip():
+            ref_doc = frappe.get_doc(reference_doctype, reference_name)
+            message = _render_named_placeholders(message, ref_doc)
         if not attach and frappe.utils.cint(attach_document_print):
             key = frappe.get_doc(reference_doctype, reference_name).get_document_share_key()
             fmt = _resolve_print_format(reference_doctype, print_format)
@@ -1372,9 +1413,14 @@ def get_template_preview(template, reference_doctype=None, reference_name=None, 
             value = fallback_values[index - 1] if index - 1 < len(fallback_values) else ""
             params.append(str(value or ""))
 
+    rendered_text = _render_template_text(template_text, params)
+    if reference_doctype and reference_name:
+        ref_doc = frappe.get_doc(reference_doctype, reference_name)
+        rendered_text = _render_named_placeholders(rendered_text, ref_doc)
+
     return {
         "template_text": template_text,
-        "rendered_text": _render_template_text(template_text, params),
+        "rendered_text": rendered_text,
         "params": params,
     }
 
