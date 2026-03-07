@@ -24,7 +24,14 @@ def _build_statement_doc(customer, args):
     doc = frappe.new_doc("Process Statement Of Accounts")
     doc.company = args.get("company")
     doc.report = args.get("report") or "General Ledger"
-    doc.customers = [{"customer": customer}]
+    doc.set("customers", [])
+    doc.append(
+        "customers",
+        {
+            "customer": customer,
+            "customer_name": frappe.db.get_value("Customer", customer, "customer_name") or customer,
+        },
+    )
     doc.currency = args.get("currency")
     doc.account = args.get("account")
     doc.letter_head = args.get("letter_head")
