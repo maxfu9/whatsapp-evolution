@@ -197,13 +197,6 @@ def _render_template_text(template_text, params):
     return rendered
 
 
-def _strip_currency_tokens(text):
-    cleaned = str(text or "")
-    cleaned = re.sub(r"[₨₹$€£¥]", "", cleaned)
-    cleaned = re.sub(r"(?i)\b(?:rs\.?|pkr|usd|eur|aed|sar|inr)\s*(?=\d)", "", cleaned)
-    return cleaned
-
-
 def _extract_response_message_id(response):
     if not isinstance(response, dict):
         return ""
@@ -1191,7 +1184,6 @@ def send_template_now(
         if reference_doctype and reference_name and rendered_text:
             ref_doc = frappe.get_doc(reference_doctype, reference_name)
             rendered_text = _render_named_placeholders(rendered_text, ref_doc)
-        rendered_text = _strip_currency_tokens(rendered_text)
 
         send_attach = attach
         if not send_attach and frappe.utils.cint(attach_document_print):
@@ -1329,7 +1321,6 @@ def send_custom_now(
         if reference_doctype and reference_name and (message or "").strip():
             ref_doc = frappe.get_doc(reference_doctype, reference_name)
             message = _render_named_placeholders(message, ref_doc)
-        message = _strip_currency_tokens(message or "")
         if not attach and frappe.utils.cint(attach_document_print):
             key = frappe.get_doc(reference_doctype, reference_name).get_document_share_key()
             fmt = _resolve_print_format(reference_doctype, print_format)
@@ -1431,7 +1422,6 @@ def get_template_preview(template, reference_doctype=None, reference_name=None, 
     if reference_doctype and reference_name:
         ref_doc = frappe.get_doc(reference_doctype, reference_name)
         rendered_text = _render_named_placeholders(rendered_text, ref_doc)
-    rendered_text = _strip_currency_tokens(rendered_text)
 
     return {
         "template_text": template_text,

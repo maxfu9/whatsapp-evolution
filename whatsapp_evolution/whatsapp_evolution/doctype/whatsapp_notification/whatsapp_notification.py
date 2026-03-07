@@ -50,13 +50,6 @@ def _render_template_text(template_text, params):
     return text
 
 
-def _strip_currency_tokens(text):
-    cleaned = str(text or "")
-    cleaned = re.sub(r"[₨₹$€£¥]", "", cleaned)
-    cleaned = re.sub(r"(?i)\b(?:rs\.?|pkr|usd|eur|aed|sar|inr)\s*(?=\d)", "", cleaned)
-    return cleaned
-
-
 def _extract_response_message_id(response):
     if not isinstance(response, dict):
         return ""
@@ -969,7 +962,6 @@ class WhatsAppNotification(Document):
             template_text = (template_doc.get("template") or template_doc.get("template_message") or "").strip()
             params = _extract_body_params(data.get("template"))
             rendered_text = _render_template_text(template_text, params)
-            rendered_text = _strip_currency_tokens(rendered_text)
 
             media_url = ""
             media_type = "document"
