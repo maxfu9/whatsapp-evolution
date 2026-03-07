@@ -1532,13 +1532,31 @@ def _collect_reference_links(reference_doctype, reference_name):
         if party_type and party:
             links.add((party_type, party))
 
-        for field in ("customer", "supplier", "lead", "prospect"):
+        for field in ("customer", "supplier", "lead", "prospect", "employee"):
             value = ref_doc.get(field)
             if value:
                 links.add((field.title(), value))
     except Exception:
         pass
     return links, direct_contacts
+
+
+def _get_employee_mobile(employee_name):
+    if not employee_name or not frappe.db.exists("Employee", employee_name):
+        return ""
+    try:
+        meta = frappe.get_meta("Employee")
+    except Exception:
+        return ""
+    candidates = []
+    for fieldname in ("cell_number", "personal_mobile_no", "personal_mobile", "mobile_no"):
+        if meta.get_field(fieldname):
+            candidates.append(frappe.db.get_value("Employee", employee_name, fieldname))
+    for raw in candidates:
+        digits = re.sub(r"\D", "", str(raw or ""))
+        if digits:
+            return str(raw)
+    return ""
 
 
 @frappe.whitelist()
@@ -1593,6 +1611,18 @@ def get_default_contact_and_whatsapp_number(reference_doctype, reference_name):
                 "contact": contact_name,
                 "mobile_no": numbers[0],
             }
+
+    # Employee fallback for docs with party_type=Employee or employee link.
+    if reference_doctype == "Employee":
+        emp_mobile = _get_employee_mobile(reference_name)
+        if emp_mobile:
+            return {"mobile_no": emp_mobile}
+
+    for link_doctype, link_name in sorted(links):
+        if link_doctype == "Employee":
+            emp_mobile = _get_employee_mobile(link_name)
+            if emp_mobile:
+                return {"mobile_no": emp_mobile}
 
     return {}
 
