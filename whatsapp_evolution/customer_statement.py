@@ -20,6 +20,21 @@ def _get_default_company(customer):
     )
 
 
+def _get_default_outgoing_whatsapp_account():
+    return frappe.db.get_value(
+        "WhatsApp Account",
+        {"is_default_outgoing": 1, "status": "Active"},
+        "name",
+    )
+
+
+def _get_customer_mobile(customer):
+    meta = frappe.get_meta("Customer")
+    if meta and meta.has_field("mobile_no"):
+        return frappe.db.get_value("Customer", customer, "mobile_no")
+    return None
+
+
 def _build_statement_doc(customer, args):
     doc = frappe.new_doc("Process Statement Of Accounts")
     doc.company = args.get("company")
@@ -100,6 +115,9 @@ def get_customer_statement_defaults(customer):
 
     company = _get_default_company(customer)
     contact_defaults = get_default_contact_and_whatsapp_number("Customer", customer) or {}
+    mobile_no = contact_defaults.get("mobile_no")
+    if not mobile_no:
+        mobile_no = _get_customer_mobile(customer)
 
     return {
         "company": company,
@@ -111,7 +129,9 @@ def get_customer_statement_defaults(customer):
         "ageing_based_on": "Due Date",
         "orientation": "Portrait",
         "contact": contact_defaults.get("contact"),
-        "mobile_no": contact_defaults.get("mobile_no"),
+        "mobile_no": mobile_no,
+        "whatsapp_account": _get_default_outgoing_whatsapp_account(),
+        "attach_pdf": 1,
     }
 
 
@@ -140,6 +160,8 @@ def send_customer_statement_whatsapp(
     account=None,
     letter_head=None,
     pdf_name=None,
+    attach_pdf=1,
+    manual_attach=None,
     whatsapp_account=None,
 ):
     _assert_statement_permission()
@@ -166,8 +188,12 @@ def send_customer_statement_whatsapp(
     if not args["company"]:
         frappe.throw(_("Company is required to generate statement"))
 
-    pdf_bytes = _get_statement_pdf_bytes(customer, args)
-    file_url = _create_statement_file(customer, pdf_bytes, args)
+    file_url = ""
+    if manual_attach:
+        file_url = manual_attach
+    elif frappe.utils.cint(attach_pdf):
+        pdf_bytes = _get_statement_pdf_bytes(customer, args)
+        file_url = _create_statement_file(customer, pdf_bytes, args)
 
     from whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_message.whatsapp_message import (
         send_custom,
@@ -183,7 +209,7 @@ def send_customer_statement_whatsapp(
             reference_name=customer,
             template=template,
             message=message or "",
-            attach=file_url,
+            attach=file_url or "",
             whatsapp_account=whatsapp_account,
         )
 
@@ -192,7 +218,7 @@ def send_customer_statement_whatsapp(
         reference_doctype="Customer",
         reference_name=customer,
         message=custom_message or message or "",
-        attach=file_url,
-        content_type="document",
+        attach=file_url or "",
+        content_type="document" if file_url else "text",
         whatsapp_account=whatsapp_account,
     )

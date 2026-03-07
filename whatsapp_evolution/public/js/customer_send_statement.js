@@ -35,6 +35,7 @@ function open_customer_statement_whatsapp_dialog(frm) {
 				fieldname: "template",
 				fieldtype: "Link",
 				options: "WhatsApp Templates",
+				get_query: () => ({ filters: { for_doctype: "Customer" } }),
 				depends_on: "eval:doc.send_mode=='Template'",
 				change() {
 					load_statement_template_preview(frm, dialog);
@@ -160,6 +161,18 @@ function open_customer_statement_whatsapp_dialog(frm) {
 				label: __("PDF Name"),
 				fieldname: "pdf_name",
 				fieldtype: "Data"
+			},
+			{
+				label: __("Attach Statement PDF"),
+				fieldname: "attach_pdf",
+				fieldtype: "Check",
+				default: 1
+			},
+			{
+				label: __("Or Upload PDF"),
+				fieldname: "manual_attach",
+				fieldtype: "Attach",
+				description: __("If set, uploaded PDF will be sent instead of generated statement PDF.")
 			}
 		],
 		primary_action_label: __("Send"),
@@ -263,6 +276,8 @@ function send_customer_statement(frm, dialog, values) {
 			account: values.account,
 			letter_head: values.letter_head,
 			pdf_name: values.pdf_name,
+			attach_pdf: values.attach_pdf ? 1 : 0,
+			manual_attach: values.manual_attach || "",
 			whatsapp_account: values.whatsapp_account || ""
 		},
 		freeze: true,
