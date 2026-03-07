@@ -166,7 +166,7 @@ function open_customer_statement_whatsapp_dialog(frm) {
 				label: __("Attach Statement PDF"),
 				fieldname: "attach_pdf",
 				fieldtype: "Check",
-				default: 1
+				default: 0
 			},
 			{
 				label: __("Or Upload PDF"),
@@ -186,7 +186,6 @@ function open_customer_statement_whatsapp_dialog(frm) {
 	});
 
 	dialog.show();
-	set_default_whatsapp_account(dialog);
 	load_customer_statement_defaults(frm, dialog);
 }
 
@@ -214,22 +213,6 @@ function populate_mobile_from_contact(dialog) {
 		callback(r) {
 			const numbers = r.message || [];
 			if (numbers.length) dialog.set_value("to", numbers[0]);
-		}
-	});
-}
-
-function set_default_whatsapp_account(dialog) {
-	frappe.call({
-		method: "frappe.client.get_value",
-		args: {
-			doctype: "WhatsApp Account",
-			filters: { is_default_outgoing: 1, status: "Active" },
-			fieldname: "name"
-		},
-		callback(r) {
-			if (r.message && r.message.name) {
-				dialog.set_value("whatsapp_account", r.message.name);
-			}
 		}
 	});
 }

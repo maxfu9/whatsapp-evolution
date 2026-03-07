@@ -131,7 +131,7 @@ def get_customer_statement_defaults(customer):
         "contact": contact_defaults.get("contact"),
         "mobile_no": mobile_no,
         "whatsapp_account": _get_default_outgoing_whatsapp_account(),
-        "attach_pdf": 1,
+        "attach_pdf": 0,
     }
 
 
