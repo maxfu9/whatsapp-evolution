@@ -12,7 +12,11 @@ frappe.ui.form.on("WhatsApp Account", {
 					const rows = (r.message && r.message.results) ? r.message.results : [];
 					const x = rows.length ? rows[0] : null;
 					if (!x) {
-						frappe.msgprint(__('No result returned.'));
+						frappe.msgprint({
+							title: __('WhatsApp Connection Test'),
+							indicator: 'orange',
+							message: __('No result returned.')
+						});
 						return;
 					}
 					const state = x.ok ? 'Connected' : (x.status || 'Error');

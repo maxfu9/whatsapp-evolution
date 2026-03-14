@@ -9,7 +9,11 @@ frappe.ui.form.on('WhatsApp Settings', {
 				callback: function(r) {
 					const rows = (r.message && r.message.results) ? r.message.results : [];
 					if (!rows.length) {
-						frappe.msgprint(__('No active WhatsApp Account found.'));
+						frappe.msgprint({
+							title: __('WhatsApp Connection Test'),
+							indicator: 'orange',
+							message: __('No active WhatsApp Account found.')
+						});
 						return;
 					}
 					let html = '<div>';
