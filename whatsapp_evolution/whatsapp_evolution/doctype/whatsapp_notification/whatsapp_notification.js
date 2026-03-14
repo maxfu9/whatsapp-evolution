@@ -81,19 +81,35 @@ frappe.notification = {
 				callback: function (response) {
 					if (response.message && response.message.length > 0) {
 					} else {
-						frappe.msgprint({
-							title: __('Notifications'),
-							indicator: 'blue',
-							message: __('No alerts for today.')
-						});
+						if (window.whatsapp_evolution_ui && window.whatsapp_evolution_ui.msgprint) {
+							window.whatsapp_evolution_ui.msgprint(
+								__('No alerts for today.'),
+								'info',
+								{ title: __('Notifications') }
+							);
+						} else {
+							frappe.msgprint({
+								title: __('Notifications'),
+								indicator: 'blue',
+								message: __('No alerts for today.')
+							});
+						}
 					}
 				},
 				error: function (error) {
-					frappe.msgprint({
-						title: __('Notifications'),
-						indicator: 'red',
-						message: __('Failed to trigger notifications.')
-					});
+					if (window.whatsapp_evolution_ui && window.whatsapp_evolution_ui.msgprint) {
+						window.whatsapp_evolution_ui.msgprint(
+							__('Failed to trigger notifications.'),
+							'error',
+							{ title: __('Notifications') }
+						);
+					} else {
+						frappe.msgprint({
+							title: __('Notifications'),
+							indicator: 'red',
+							message: __('Failed to trigger notifications.')
+						});
+					}
 				}
 			});
 		});

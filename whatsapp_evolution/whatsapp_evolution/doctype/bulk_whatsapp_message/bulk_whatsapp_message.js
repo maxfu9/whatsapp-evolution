@@ -29,11 +29,19 @@ frappe.ui.form.on('Bulk WhatsApp Message', {
                                 </div>
                             `;
                             
-                            frappe.msgprint({
-                                title: __('Bulk Message Progress'),
-                                indicator: 'blue',
-                                message: html
-                            });
+                            if (window.whatsapp_evolution_ui && window.whatsapp_evolution_ui.msgprint) {
+                                window.whatsapp_evolution_ui.msgprint(
+                                    html,
+                                    'info',
+                                    { title: __('Bulk Message Progress') }
+                                );
+                            } else {
+                                frappe.msgprint({
+                                    title: __('Bulk Message Progress'),
+                                    indicator: 'blue',
+                                    message: html
+                                });
+                            }
                         }
                     }
                 });

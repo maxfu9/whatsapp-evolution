@@ -9,11 +9,19 @@ frappe.ui.form.on('WhatsApp Settings', {
 				callback: function(r) {
 					const rows = (r.message && r.message.results) ? r.message.results : [];
 					if (!rows.length) {
-						frappe.msgprint({
-							title: __('WhatsApp Connection Test'),
-							indicator: 'orange',
-							message: __('No active WhatsApp Account found.')
-						});
+						if (window.whatsapp_evolution_ui && window.whatsapp_evolution_ui.msgprint) {
+							window.whatsapp_evolution_ui.msgprint(
+								__('No active WhatsApp Account found.'),
+								'warning',
+								{ title: __('WhatsApp Connection Test') }
+							);
+						} else {
+							frappe.msgprint({
+								title: __('WhatsApp Connection Test'),
+								indicator: 'orange',
+								message: __('No active WhatsApp Account found.')
+							});
+						}
 						return;
 					}
 					let html = '<div>';
@@ -31,11 +39,20 @@ frappe.ui.form.on('WhatsApp Settings', {
 						`;
 					});
 					html += '</div>';
-					frappe.msgprint({
-						title: __('WhatsApp Connection Test'),
-						indicator: rows.some(x => x.ok) ? 'green' : 'red',
-						message: html
-					});
+					const any_ok = rows.some(x => x.ok);
+					if (window.whatsapp_evolution_ui && window.whatsapp_evolution_ui.msgprint) {
+						window.whatsapp_evolution_ui.msgprint(
+							html,
+							any_ok ? 'success' : 'error',
+							{ title: __('WhatsApp Connection Test') }
+						);
+					} else {
+						frappe.msgprint({
+							title: __('WhatsApp Connection Test'),
+							indicator: any_ok ? 'green' : 'red',
+							message: html
+						});
+					}
 				}
 			});
 		});

@@ -118,17 +118,33 @@ frappe.ui.form.on('WhatsApp Recipient List', {
                 
                 html += '</tbody></table>';
                 
-                frappe.msgprint({
-                    title: __('Recipient Validation'),
-                    indicator: 'red',
-                    message: html
-                });
+                if (window.whatsapp_evolution_ui && window.whatsapp_evolution_ui.msgprint) {
+                    window.whatsapp_evolution_ui.msgprint(
+                        html,
+                        'error',
+                        { title: __('Recipient Validation') }
+                    );
+                } else {
+                    frappe.msgprint({
+                        title: __('Recipient Validation'),
+                        indicator: 'red',
+                        message: html
+                    });
+                }
             } else {
-                frappe.msgprint({
-                    title: __('Recipient Validation'),
-                    indicator: 'green',
-                    message: __('All recipients have valid numbers.')
-                });
+                if (window.whatsapp_evolution_ui && window.whatsapp_evolution_ui.msgprint) {
+                    window.whatsapp_evolution_ui.msgprint(
+                        __('All recipients have valid numbers.'),
+                        'success',
+                        { title: __('Recipient Validation') }
+                    );
+                } else {
+                    frappe.msgprint({
+                        title: __('Recipient Validation'),
+                        indicator: 'green',
+                        message: __('All recipients have valid numbers.')
+                    });
+                }
             }
         });
     }
