@@ -30,7 +30,7 @@ frappe.ui.form.on('Bulk WhatsApp Message', {
                             `;
                             
                             frappe.msgprint({
-                                title: __('Message Progress'),
+                                title: __('Bulk Message Progress'),
                                 indicator: 'blue',
                                 message: html
                             });

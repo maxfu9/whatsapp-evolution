@@ -28,7 +28,7 @@ frappe.ui.form.on('WhatsApp Settings', {
 					});
 					html += '</div>';
 					frappe.msgprint({
-						title: __('Evolution Connection Test'),
+						title: __('WhatsApp Connection Test'),
 						indicator: rows.some(x => x.ok) ? 'green' : 'red',
 						message: html
 					});
