@@ -22,6 +22,10 @@ from whatsapp_evolution.utils import (
 )
 from whatsapp_evolution.whatsapp_evolution.providers import EvolutionProvider
 from whatsapp_evolution.utils.formatting import format_amount_no_symbol
+from whatsapp_evolution.utils.template_helpers import (
+    get_items_text_value,
+    get_ledger_balance_value,
+)
 
 
 LEDGER_BALANCE_ALIASES = {"ledger_balance", "_ledger_balance", "ledger balance"}
@@ -340,62 +344,6 @@ def _get_party_role_numbers(doc_data, role_name):
     return _dedupe_numbers(numbers)
 
 
-def _get_ledger_balance_value(doc):
-    try:
-        from erpnext.accounts.utils import get_balance_on
-    except Exception:
-        return None
-
-    account = None
-    party_type = doc.get("party_type")
-    party = doc.get("party")
-    company = doc.get("company")
-    posting_date = doc.get("posting_date") or doc.get("transaction_date") or nowdate()
-    payment_type = doc.get("payment_type")
-
-    if doc.doctype == "Payment Entry":
-        if payment_type == "Receive":
-            account = doc.get("paid_from")
-        elif payment_type == "Pay":
-            account = doc.get("paid_to")
-        else:
-            account = doc.get("paid_from") or doc.get("paid_to")
-
-    if not account:
-        for fieldname in ("account", "debit_to", "credit_to", "paid_from", "paid_to"):
-            account = doc.get(fieldname)
-            if account:
-                break
-
-    # Generic fallback for party-ledger doctypes (Customer/Supplier/etc)
-    if not account and party_type and party:
-        try:
-            from erpnext.accounts.party import get_party_account
-            account = get_party_account(party_type, party, company)
-        except Exception:
-            account = None
-
-    if not account:
-        return None
-
-    try:
-        balance = get_balance_on(
-            account=account,
-            date=posting_date,
-            party_type=party_type,
-            party=party,
-            company=company,
-        )
-    except TypeError:
-        balance = get_balance_on(account=account, date=posting_date)
-    except Exception:
-        return None
-
-    currency = doc.get("party_account_currency") or doc.get("paid_from_account_currency") or doc.get("paid_to_account_currency") or doc.get("currency")
-    try:
-        return format_amount_no_symbol(balance)
-    except Exception:
-        return str(balance)
 
 
 def _resolve_template_param_value(doc, fieldname):
@@ -404,12 +352,12 @@ def _resolve_template_param_value(doc, fieldname):
         return ""
 
     if fieldname.lower() in LEDGER_BALANCE_ALIASES:
-        value = _get_ledger_balance_value(doc)
+        value = get_ledger_balance_value(doc)
         if value is not None:
             return value
 
     if fieldname.lower() in ITEMS_TEXT_ALIASES:
-        value = _get_items_text_value(doc)
+        value = get_items_text_value(doc)
         if value is not None:
             return value
     try:
@@ -434,28 +382,6 @@ def _resolve_template_param_value(doc, fieldname):
         return str(value)
 
 
-def _get_items_text_value(doc):
-    if doc.doctype not in ("Sales Invoice", "Purchase Invoice"):
-        return None
-
-    rows = doc.get("items") or []
-    if not rows:
-        return ""
-
-    chunks = []
-    for row in rows:
-        item_name = row.get("item_name") or row.get("item_code") or "-"
-        qty = frappe.utils.flt(row.get("qty") or 0)
-        uom = row.get("uom") or ""
-        rate = frappe.utils.flt(row.get("rate") or 0)
-        amount = frappe.utils.flt(row.get("amount") or 0)
-        chunks.append(
-            "---------------------------\n"
-            f"🔹 *نام:* {item_name}\n"
-            f"   *تعداد:* {qty:g} {uom} × *قیمت:* {format_amount_no_symbol(rate)} = *کل:* {format_amount_no_symbol(amount)}"
-        )
-    chunks.append("---------------------------")
-    return "\n".join(chunks)
 
 
 def _was_recently_sent(reference_doctype, reference_name, to_number, template_name, seconds=90):
