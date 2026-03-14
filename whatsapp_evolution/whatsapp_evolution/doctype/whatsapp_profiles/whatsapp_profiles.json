@@ -5,6 +5,7 @@
  "doctype": "DocType",
  "engine": "InnoDB",
  "field_order": [
+  "section_break_profile",
   "profile_name",
   "column_break_wzto",
   "number",
@@ -15,6 +16,11 @@
   "whatsapp_account"
  ],
  "fields": [
+  {
+   "fieldname": "section_break_profile",
+   "fieldtype": "Section Break",
+   "label": "Profile"
+  },
   {
    "fieldname": "profile_name",
    "fieldtype": "Data",

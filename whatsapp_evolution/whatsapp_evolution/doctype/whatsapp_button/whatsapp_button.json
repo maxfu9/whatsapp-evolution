@@ -6,8 +6,10 @@
  "editable_grid": 1,
  "engine": "InnoDB",
  "field_order": [
+  "section_break_details",
   "button_type",
   "button_label",
+  "column_break_details",
   "sequence",
   "is_active",
   "phone_number",
@@ -16,6 +18,11 @@
   "url_type"
  ],
  "fields": [
+  {
+   "fieldname": "section_break_details",
+   "fieldtype": "Section Break",
+   "label": "Button Details"
+  },
   {
    "fieldname": "button_type",
    "fieldtype": "Select",
@@ -30,6 +37,10 @@
    "in_list_view": 1,
    "label": "Button Label",
    "reqd": 1
+  },
+  {
+   "fieldname": "column_break_details",
+   "fieldtype": "Column Break"
   },
   {
    "depends_on": "eval:doc.button_type == \"Call Phone\"",

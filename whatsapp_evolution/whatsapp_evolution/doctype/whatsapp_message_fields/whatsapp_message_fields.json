@@ -6,9 +6,15 @@
  "editable_grid": 1,
  "engine": "InnoDB",
  "field_order": [
+  "section_break_mapping",
   "field_name"
  ],
  "fields": [
+  {
+   "fieldname": "section_break_mapping",
+   "fieldtype": "Section Break",
+   "label": "Field Mapping"
+  },
   {
    "fieldname": "field_name",
    "fieldtype": "Data",

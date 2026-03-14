@@ -6,15 +6,26 @@
  "editable_grid": 1,
  "engine": "InnoDB",
  "field_order": [
+  "section_break_payload",
   "template",
+  "column_break_payload",
   "meta_data"
  ],
  "fields": [
+  {
+   "fieldname": "section_break_payload",
+   "fieldtype": "Section Break",
+   "label": "Payload"
+  },
   {
    "fieldname": "template",
    "fieldtype": "Data",
    "label": "Template",
    "in_list_view": 1
+  },
+  {
+   "fieldname": "column_break_payload",
+   "fieldtype": "Column Break"
   },
   {
    "fieldname": "meta_data",

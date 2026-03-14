@@ -6,6 +6,7 @@
  "editable_grid": 1,
  "engine": "InnoDB",
  "field_order": [
+  "section_break_message",
   "label",
   "type",
   "status",
@@ -36,6 +37,11 @@
   "reference_name"
  ],
  "fields": [
+  {
+   "fieldname": "section_break_message",
+   "fieldtype": "Section Break",
+   "label": "Message"
+  },
   {
    "allow_in_quick_entry": 1,
    "fieldname": "label",
