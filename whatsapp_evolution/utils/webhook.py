@@ -1,5 +1,6 @@
 """Webhook."""
 import frappe
+from frappe import _
 import json
 import requests
 from werkzeug.wrappers import Response
@@ -38,10 +39,10 @@ def get():
 		account = frappe._dict(name=verify_token, webhook_verify_token=verify_token)
 
 	if not account:
-		frappe.throw("No matching WhatsApp account")
+		frappe.throw(_("No matching WhatsApp account"))
 
 	if frappe.form_dict.get("hub.verify_token") != account.webhook_verify_token:
-		frappe.throw("Verify token does not match")
+		frappe.throw(_("Verify token does not match"))
 
 	return Response(hub_challenge, status=200)
 

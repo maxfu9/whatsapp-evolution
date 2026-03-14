@@ -1,5 +1,6 @@
 import json
 import frappe
+from frappe import _
 from frappe.utils import cint
 
 
@@ -9,12 +10,14 @@ def get_progress(name):
     doc = frappe.get_doc("Bulk WhatsApp Message", name)
     return doc.get_progress()
 
+
 @frappe.whitelist()
 def retry_failed(name):
     """Retry failed messages"""
     doc = frappe.get_doc("Bulk WhatsApp Message", name)
     doc.retry_failed()
     return True
+
 
 @frappe.whitelist()
 def import_recipients(list_name, doctype, mobile_field=None, name_field=None, filters=None, limit=None, data_fields=None):
@@ -23,19 +26,20 @@ def import_recipients(list_name, doctype, mobile_field=None, name_field=None, fi
         try:
             filters = json.loads(filters)
         except json.JSONDecodeError:
-            frappe.throw("Invalid JSON in filters")
+            frappe.throw(_("Invalid JSON in filters"))
 
     if data_fields and isinstance(data_fields, str):
         try:
             data_fields = json.loads(data_fields)
         except json.JSONDecodeError:
-            frappe.throw("Invalid JSON in data_fields")
+            frappe.throw(_("Invalid JSON in data fields"))
         
     doc = frappe.get_doc("WhatsApp Recipient List", list_name)
     count = doc.import_list_from_doctype(doctype, mobile_field, name_field, filters, limit, data_fields)
     doc.save()
     
     return count
+
 
 @frappe.whitelist()
 def schedule_bulk_messages():
