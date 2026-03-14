@@ -10,8 +10,10 @@ from frappe.model.document import Document
 from frappe.model.naming import make_autoname
 from whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_message.whatsapp_message import (
     _is_evolution_enabled_global,
-    _parse_body_param,
-    _render_template_text,
+)
+from whatsapp_evolution.utils.template_rendering import (
+    parse_body_param,
+    render_numeric_placeholders,
 )
 
 # Add these files to your whatsapp_evolution app
@@ -211,9 +213,9 @@ class BulkWhatsAppMessage(Document):
             elif isinstance(recipient_data, list):
                 params = [str(v or "") for v in recipient_data]
         elif self.variable_type == "Common":
-            params = _parse_body_param(self.template_variables)
+            params = parse_body_param(self.template_variables)
 
-        return _render_template_text(template_text, params)
+        return render_numeric_placeholders(template_text, params)
 
     def retry_failed(self):
         """Retry failed messages"""

@@ -18,16 +18,15 @@ from whatsapp_evolution.utils import (
     get_evolution_settings,
     is_evolution_enabled,
 )
-from whatsapp_evolution.utils.formatting import format_amount_no_symbol
-from whatsapp_evolution.utils.template_helpers import (
-    get_items_text_value,
-    get_ledger_balance_value,
+from whatsapp_evolution.utils.template_rendering import (
+    parse_body_param,
+    render_numeric_placeholders,
+    render_named_placeholders,
+    resolve_template_value,
 )
 from whatsapp_evolution.whatsapp_evolution.providers import EvolutionProvider
 
 
-LEDGER_BALANCE_ALIASES = {"ledger_balance", "_ledger_balance", "ledger balance"}
-ITEMS_TEXT_ALIASES = {"custom_wa_items", "wa_items", "items_list", "invoice_items_list"}
 ENTITY_LABEL_DOCTYPES = {"Customer", "Supplier", "User", "Employee", "Contact", "Lead", "Prospect"}
 
 
@@ -181,27 +180,6 @@ def _find_linked_contact_name(reference_doctype, reference_name, phone_number=No
     return contact_names[0]
 
 
-def _parse_body_param(body_param):
-    if not body_param:
-        return []
-    try:
-        parsed = json.loads(body_param) if isinstance(body_param, str) else body_param
-    except Exception:
-        return []
-    if isinstance(parsed, dict):
-        return [str(v or "") for _, v in sorted(parsed.items(), key=lambda x: int(str(x[0])) if str(x[0]).isdigit() else str(x[0]))]
-    if isinstance(parsed, list):
-        return [str(v or "") for v in parsed]
-    return []
-
-
-def _render_template_text(template_text, params):
-    rendered = template_text or ""
-    for idx, value in enumerate(params, start=1):
-        rendered = re.sub(r"{{\s*" + str(idx) + r"\s*}}", str(value or ""), rendered)
-    return rendered
-
-
 def _extract_response_message_id(response):
     if not isinstance(response, dict):
         return ""
@@ -339,50 +317,6 @@ def _resolve_print_format(doctype_name, selected_print_format=None):
                 fieldname="value",
             )
     return default_format or "Standard"
-
-
-
-
-def _render_named_placeholders(text, ref_doc):
-    if not text:
-        return ""
-
-    def _replace(match):
-        key = (match.group(1) or "").strip()
-        if not key or key.isdigit():
-            return match.group(0)
-        return _resolve_template_value(ref_doc, key)
-
-    return re.sub(r"{{\s*([^{}]+?)\s*}}", _replace, text)
-
-
-def _resolve_template_value(ref_doc, field_name):
-    key = (field_name or "").strip()
-    if not key:
-        return ""
-    if key.lower() in LEDGER_BALANCE_ALIASES:
-        value = get_ledger_balance_value(ref_doc)
-        if value is not None:
-            return str(value)
-    if key.lower() in ITEMS_TEXT_ALIASES:
-        value = get_items_text_value(ref_doc)
-        if value is not None:
-            return str(value)
-    try:
-        meta = frappe.get_meta(ref_doc.doctype)
-        df = meta.get_field(key) if meta else None
-        if df and df.fieldtype == "Currency":
-            raw_value = ref_doc.get(key)
-            if raw_value in (None, ""):
-                return ""
-            return format_amount_no_symbol(raw_value)
-    except Exception:
-        pass
-    try:
-        return str(ref_doc.get_formatted(key) or "")
-    except Exception:
-        value = ref_doc.get(key)
-        return str(value or "")
 
 
 
@@ -760,7 +694,7 @@ class WhatsAppMessage(Document):
             template_parameters = []
 
             if self.body_param is not None:
-                params = _parse_body_param(self.body_param)
+                params = parse_body_param(self.body_param)
                 for param in params:
                     parameters.append({"type": "text", "text": param})
                     template_parameters.append(param)
@@ -774,7 +708,7 @@ class WhatsAppMessage(Document):
             else:
                 ref_doc = frappe.get_doc(self.reference_doctype, self.reference_name)
                 for field_name in field_names:
-                    value = _resolve_template_value(ref_doc, field_name)
+                    value = resolve_template_value(ref_doc, field_name)
                     parameters.append({"type": "text", "text": value})
                     template_parameters.append(value)
 
@@ -1093,7 +1027,7 @@ def send_template_now(
         rendered_text = (message or preview.get("rendered_text") or preview.get("template_text") or "").strip()
         if reference_doctype and reference_name and rendered_text:
             ref_doc = frappe.get_doc(reference_doctype, reference_name)
-            rendered_text = _render_named_placeholders(rendered_text, ref_doc)
+            rendered_text = render_named_placeholders(rendered_text, ref_doc)
 
         send_attach = attach
         if not send_attach and frappe.utils.cint(attach_document_print):
@@ -1230,7 +1164,7 @@ def send_custom_now(
         actual_content_type = content_type or "text"
         if reference_doctype and reference_name and (message or "").strip():
             ref_doc = frappe.get_doc(reference_doctype, reference_name)
-            message = _render_named_placeholders(message, ref_doc)
+            message = render_named_placeholders(message, ref_doc)
         if not attach and frappe.utils.cint(attach_document_print):
             key = frappe.get_doc(reference_doctype, reference_name).get_document_share_key()
             fmt = _resolve_print_format(reference_doctype, print_format)
@@ -1310,13 +1244,13 @@ def get_template_preview(template, reference_doctype=None, reference_name=None, 
     template_text = _get_template_text(template_doc)
     params = []
 
-    manual_params = _parse_body_param(body_param)
+    manual_params = parse_body_param(body_param)
     if manual_params:
         params = manual_params
     elif reference_doctype and reference_name and template_doc.sample_values:
         field_names = template_doc.field_names.split(",") if template_doc.field_names else template_doc.sample_values.split(",")
         ref_doc = frappe.get_doc(reference_doctype, reference_name)
-        params = [_resolve_template_value(ref_doc, field) for field in field_names if field and field.strip()]
+        params = [resolve_template_value(ref_doc, field) for field in field_names if field and field.strip()]
     elif reference_doctype and reference_name:
         ref_doc = frappe.get_doc(reference_doctype, reference_name)
         placeholder_matches = re.findall(r"{{\s*(\d+)\s*}}", template_text)
@@ -1328,10 +1262,10 @@ def get_template_preview(template, reference_doctype=None, reference_name=None, 
             value = fallback_values[index - 1] if index - 1 < len(fallback_values) else ""
             params.append(str(value or ""))
 
-    rendered_text = _render_template_text(template_text, params)
+    rendered_text = render_numeric_placeholders(template_text, params)
     if reference_doctype and reference_name:
         ref_doc = frappe.get_doc(reference_doctype, reference_name)
-        rendered_text = _render_named_placeholders(rendered_text, ref_doc)
+        rendered_text = render_named_placeholders(rendered_text, ref_doc)
 
     return {
         "template_text": template_text,

@@ -1,6 +1,5 @@
 """Notification."""
 
-import json
 import re
 import frappe
 from time import sleep
@@ -21,38 +20,15 @@ from whatsapp_evolution.utils import (
     is_evolution_enabled,
 )
 from whatsapp_evolution.whatsapp_evolution.providers import EvolutionProvider
-from whatsapp_evolution.utils.formatting import format_amount_no_symbol
-from whatsapp_evolution.utils.template_helpers import (
-    get_items_text_value,
-    get_ledger_balance_value,
+from whatsapp_evolution.utils.template_rendering import (
+    extract_body_params,
+    render_numeric_placeholders,
+    resolve_template_value,
 )
-
-
-LEDGER_BALANCE_ALIASES = {"ledger_balance", "_ledger_balance", "ledger balance"}
-ITEMS_TEXT_ALIASES = {"custom_wa_items", "wa_items", "items_list", "invoice_items_list"}
 
 
 def _is_evolution_enabled(whatsapp_account=None):
     return is_evolution_enabled(whatsapp_account=whatsapp_account)
-
-
-def _extract_body_params(template_data):
-    params = []
-    components = (template_data or {}).get("components") or []
-    for component in components:
-        if component.get("type") == "body":
-            for p in component.get("parameters") or []:
-                if p.get("type") == "text":
-                    params.append(str(p.get("text") or ""))
-    return params
-
-
-def _render_template_text(template_text, params):
-    text = template_text or ""
-    for idx, value in enumerate(params, start=1):
-        text = text.replace(f"{{{{{idx}}}}}", str(value or ""))
-        text = text.replace(f"{{{{ {idx} }}}}", str(value or ""))
-    return text
 
 
 def _extract_response_message_id(response):
@@ -346,44 +322,6 @@ def _get_party_role_numbers(doc_data, role_name):
 
 
 
-def _resolve_template_param_value(doc, fieldname):
-    fieldname = (fieldname or "").strip()
-    if not fieldname:
-        return ""
-
-    if fieldname.lower() in LEDGER_BALANCE_ALIASES:
-        value = get_ledger_balance_value(doc)
-        if value is not None:
-            return value
-
-    if fieldname.lower() in ITEMS_TEXT_ALIASES:
-        value = get_items_text_value(doc)
-        if value is not None:
-            return value
-    try:
-        meta = frappe.get_meta(doc.doctype)
-        df = meta.get_field(fieldname) if meta else None
-        if df and df.fieldtype == "Currency":
-            raw_value = doc.get(fieldname)
-            if raw_value in (None, ""):
-                return ""
-            return format_amount_no_symbol(raw_value)
-    except Exception:
-        pass
-
-    try:
-        return doc.get_formatted(fieldname)
-    except Exception:
-        value = doc.get(fieldname)
-        if value is None:
-            return ""
-        if isinstance(value, (datetime.date, datetime.datetime)):
-            return str(value)
-        return str(value)
-
-
-
-
 def _was_recently_sent(reference_doctype, reference_name, to_number, template_name, seconds=90):
     if not (reference_doctype and reference_name and to_number):
         return False
@@ -547,7 +485,7 @@ class WhatsAppNotification(Document):
             parameters = []
             if self.fields:
                 for field in self.fields:
-                    value = _resolve_template_param_value(doc, field.field_name)
+                    value = resolve_template_value(doc, field.field_name)
                     parameters.append({
                         "type": "text",
                         "text": value
@@ -892,8 +830,8 @@ class WhatsAppNotification(Document):
             to_number = format_number(data.get("to"))
             template_doc = frappe.get_doc("WhatsApp Templates", self.template)
             template_text = (template_doc.get("template") or template_doc.get("template_message") or "").strip()
-            params = _extract_body_params(data.get("template"))
-            rendered_text = _render_template_text(template_text, params)
+            params = extract_body_params(data.get("template"))
+            rendered_text = render_numeric_placeholders(template_text, params)
 
             media_url = ""
             media_type = "document"
