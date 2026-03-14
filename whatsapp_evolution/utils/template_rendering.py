@@ -1,3 +1,5 @@
+"""Shared helpers for template placeholder parsing and rendering."""
+
 import json
 import re
 import frappe

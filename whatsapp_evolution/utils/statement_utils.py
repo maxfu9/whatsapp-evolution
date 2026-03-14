@@ -1,3 +1,5 @@
+"""Utilities for customer statement generation and WhatsApp sending."""
+
 import frappe
 from frappe import _
 from frappe.utils import add_months, nowdate

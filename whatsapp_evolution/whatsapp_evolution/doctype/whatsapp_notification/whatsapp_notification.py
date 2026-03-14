@@ -372,10 +372,10 @@ class WhatsAppNotification(Document):
                 fields=["fieldname"]
             )
             if not any(field.fieldname == self.field_name for field in fields): # noqa
-                frappe.throw(_("Field name {0} does not exists").format(self.field_name))
+                frappe.throw(_("Field name {0} does not exist").format(self.field_name))
         if self.custom_attachment:
             if not self.attach and not self.attach_from_field:
-                frappe.throw(_("Either {0} a file or add a {1} to send attachemt").format(
+                frappe.throw(_("Either {0} a file or add a {1} to send attachment").format(
                     frappe.bold(_("Attach")),
                     frappe.bold(_("Attach from field")),
                 ))
