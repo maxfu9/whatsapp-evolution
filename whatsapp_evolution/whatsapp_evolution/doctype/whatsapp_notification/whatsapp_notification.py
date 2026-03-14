@@ -21,6 +21,7 @@ from whatsapp_evolution.utils import (
     is_evolution_enabled,
 )
 from whatsapp_evolution.whatsapp_evolution.providers import EvolutionProvider
+from whatsapp_evolution.utils.formatting import format_amount_no_symbol
 
 
 LEDGER_BALANCE_ALIASES = {"ledger_balance", "_ledger_balance", "ledger balance"}
@@ -392,14 +393,9 @@ def _get_ledger_balance_value(doc):
 
     currency = doc.get("party_account_currency") or doc.get("paid_from_account_currency") or doc.get("paid_to_account_currency") or doc.get("currency")
     try:
-        return _format_amount_no_symbol(balance)
+        return format_amount_no_symbol(balance)
     except Exception:
         return str(balance)
-
-
-def _format_amount_no_symbol(value):
-    amount = frappe.utils.flt(value or 0)
-    return f"{amount:,.2f}"
 
 
 def _resolve_template_param_value(doc, fieldname):
@@ -423,7 +419,7 @@ def _resolve_template_param_value(doc, fieldname):
             raw_value = doc.get(fieldname)
             if raw_value in (None, ""):
                 return ""
-            return _format_amount_no_symbol(raw_value)
+            return format_amount_no_symbol(raw_value)
     except Exception:
         pass
 
@@ -456,7 +452,7 @@ def _get_items_text_value(doc):
         chunks.append(
             "---------------------------\n"
             f"🔹 *نام:* {item_name}\n"
-            f"   *تعداد:* {qty:g} {uom} × *قیمت:* {_format_amount_no_symbol(rate)} = *کل:* {_format_amount_no_symbol(amount)}"
+            f"   *تعداد:* {qty:g} {uom} × *قیمت:* {format_amount_no_symbol(rate)} = *کل:* {format_amount_no_symbol(amount)}"
         )
     chunks.append("---------------------------")
     return "\n".join(chunks)

@@ -18,6 +18,7 @@ from whatsapp_evolution.utils import (
     get_evolution_settings,
     is_evolution_enabled,
 )
+from whatsapp_evolution.utils.formatting import format_amount_no_symbol
 from whatsapp_evolution.whatsapp_evolution.providers import EvolutionProvider
 
 
@@ -411,14 +412,9 @@ def _get_ledger_balance_value(doc):
         or (frappe.db.get_value("Company", company, "default_currency") if company else None)
     )
     try:
-        return _format_amount_no_symbol(balance)
+        return format_amount_no_symbol(balance)
     except Exception:
         return str(balance)
-
-
-def _format_amount_no_symbol(value):
-    amount = frappe.utils.flt(value or 0)
-    return f"{amount:,.2f}"
 
 
 def _render_named_placeholders(text, ref_doc):
@@ -453,7 +449,7 @@ def _resolve_template_value(ref_doc, field_name):
             raw_value = ref_doc.get(key)
             if raw_value in (None, ""):
                 return ""
-            return _format_amount_no_symbol(raw_value)
+            return format_amount_no_symbol(raw_value)
     except Exception:
         pass
     try:
@@ -481,7 +477,7 @@ def _get_items_text_value(doc):
         chunks.append(
             "---------------------------\n"
             f"🔹 *نام:* {item_name}\n"
-            f"   *تعداد:* {qty:g} {uom} × *قیمت:* {_format_amount_no_symbol(rate)} = *کل:* {_format_amount_no_symbol(amount)}"
+            f"   *تعداد:* {qty:g} {uom} × *قیمت:* {format_amount_no_symbol(rate)} = *کل:* {format_amount_no_symbol(amount)}"
         )
     chunks.append("---------------------------")
     return "\n".join(chunks)
