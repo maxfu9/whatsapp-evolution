@@ -13,7 +13,8 @@
   {
    "fieldname": "template",
    "fieldtype": "Data",
-   "label": "Template"
+   "label": "Template",
+   "in_list_view": 1
   },
   {
    "fieldname": "meta_data",
@@ -42,5 +43,6 @@
  "sort_field": "modified",
  "sort_order": "DESC",
  "states": [],
- "title_field": "template"
+ "title_field": "template",
+ "description": "Webhook and notification payload logs for troubleshooting."
 }

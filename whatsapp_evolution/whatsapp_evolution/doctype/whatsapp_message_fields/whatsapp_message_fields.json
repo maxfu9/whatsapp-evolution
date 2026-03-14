@@ -28,5 +28,6 @@
  "permissions": [],
  "sort_field": "modified",
  "sort_order": "DESC",
- "states": []
+ "states": [],
+ "description": "Template field mappings for WhatsApp messages."
 }

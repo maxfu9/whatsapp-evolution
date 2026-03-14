@@ -66,14 +66,16 @@
    "fieldname": "to",
    "fieldtype": "Data",
    "label": "TO ",
-   "set_only_once": 1
+   "set_only_once": 1,
+   "in_list_view": 1
   },
   {
    "depends_on": "eval:(doc.type==\"Incoming\");",
    "fieldname": "from",
    "fieldtype": "Data",
    "label": "From",
-   "set_only_once": 1
+   "set_only_once": 1,
+   "in_list_view": 1
   },
   {
    "default": "0",
@@ -123,7 +125,8 @@
    "fieldname": "message_id",
    "fieldtype": "Data",
    "label": "Message ID",
-   "read_only": 1
+   "read_only": 1,
+   "in_list_view": 1
   },
   {
    "fieldname": "conversation_id",
@@ -133,12 +136,12 @@
   },
   {
    "allow_in_quick_entry": 1,
-  "fieldname": "content_type",
-  "fieldtype": "Select",
-  "label": "Content Type",
-  "options": "text\ndocument\nimage\nvideo\naudio\nreaction\nlocation\ncontact\nbutton\ninteractive",
-  "reqd": 1
- },
+   "fieldname": "content_type",
+   "fieldtype": "Select",
+   "label": "Content Type",
+   "options": "text\ndocument\nimage\nvideo\naudio\nreaction\nlocation\ncontact\nbutton\ninteractive",
+   "reqd": 1
+  },
   {
    "allow_in_quick_entry": 1,
    "depends_on": "eval:(doc.content_type =='audio' || doc.content_type =='video' || doc.content_type =='document' || doc.content_type =='image' || doc.message_type=='Template')",
@@ -239,5 +242,6 @@
  "sort_field": "modified",
  "sort_order": "DESC",
  "states": [],
- "track_seen": 1
+ "track_seen": 1,
+ "description": "Inbound and outbound WhatsApp messages with status, content, and references."
 }

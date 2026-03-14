@@ -76,7 +76,8 @@
    "fieldname": "recipient_count",
    "fieldtype": "Int",
    "label": "Recipient Count",
-   "read_only": 1
+   "read_only": 1,
+   "in_list_view": 1
   },
   {
    "fieldname": "section_message",
@@ -137,13 +138,15 @@
    "fieldname": "sent_count",
    "fieldtype": "Int",
    "label": "Sent Count",
-   "read_only": 1
+   "read_only": 1,
+   "in_list_view": 1
   },
   {
    "description": "Leave empty to send immediately after submission",
    "fieldname": "scheduled_time",
    "fieldtype": "Datetime",
-   "label": "Scheduled Time"
+   "label": "Scheduled Time",
+   "in_list_view": 1
   },
   {
    "fieldname": "amended_from",
@@ -172,7 +175,8 @@
    "fieldname": "whatsapp_account",
    "fieldtype": "Link",
    "label": "Whatsapp Account",
-   "options": "WhatsApp Account"
+   "options": "WhatsApp Account",
+   "in_list_view": 1
   },
   {
    "fieldname": "column_break_xvnh",
@@ -229,5 +233,6 @@
  "row_format": "Dynamic",
  "sort_field": "modified",
  "sort_order": "DESC",
- "states": []
+ "states": [],
+ "description": "Queue and track bulk WhatsApp sends with recipients, templates, and delivery status."
 }

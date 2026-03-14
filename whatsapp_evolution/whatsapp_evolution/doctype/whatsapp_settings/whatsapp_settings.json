@@ -67,5 +67,6 @@
  "row_format": "Dynamic",
  "sort_field": "modified",
  "sort_order": "DESC",
- "states": []
+ "states": [],
+ "description": "Global WhatsApp Evolution API settings and defaults."
 }

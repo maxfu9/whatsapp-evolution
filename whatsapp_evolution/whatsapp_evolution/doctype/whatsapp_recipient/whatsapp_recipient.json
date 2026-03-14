@@ -43,5 +43,6 @@
  "permissions": [],
  "sort_field": "modified",
  "sort_order": "DESC",
- "states": []
+ "states": [],
+ "description": "Recipient entries used in bulk WhatsApp lists."
 }

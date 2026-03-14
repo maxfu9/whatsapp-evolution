@@ -56,7 +56,8 @@
    "default": "0",
    "fieldname": "is_default_outgoing",
    "fieldtype": "Check",
-   "label": "Default Outgoing"
+   "label": "Default Outgoing",
+   "in_list_view": 1
   },
   {
    "fieldname": "section_break_meta",
@@ -118,7 +119,8 @@
    "description": "Optional. Example: erpnext",
    "fieldname": "evolution_instance",
    "fieldtype": "Data",
-   "label": "Evolution Instance"
+   "label": "Evolution Instance",
+   "in_list_view": 1
   },
   {
    "description": "Optional override. Example: /message/sendText/{instance}",
@@ -176,5 +178,6 @@
  "row_format": "Dynamic",
  "sort_field": "modified",
  "sort_order": "DESC",
- "states": []
+ "states": [],
+ "description": "Connection settings for WhatsApp providers and Evolution instances."
 }
