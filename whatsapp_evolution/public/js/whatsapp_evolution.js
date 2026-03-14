@@ -323,6 +323,24 @@ function populate_mobile_from_contact(dialog) {
 	});
 }
 
+window.whatsapp_evolution_ui = window.whatsapp_evolution_ui || {};
+window.whatsapp_evolution_ui.alert = function (message, level = "info", opts = {}) {
+	const indicators = {
+		success: "green",
+		info: "blue",
+		warning: "orange",
+		error: "red"
+	};
+	const indicator = indicators[level] || indicators.info;
+	frappe.show_alert(
+		{
+			message,
+			indicator
+		},
+		opts.duration
+	);
+};
+
 function autofill_contact_and_mobile_from_doc(frm, dialog) {
 	// Strict prefill: only from Contact Phone rows where both
 	// Is Primary Mobile and WhatsApp are checked.

@@ -71,10 +71,14 @@ frappe.ui.form.on('WhatsApp Recipient List', {
                     frm.refresh_field('recipients');
                     d.hide();
                     
-                    frappe.show_alert({
-                        message: __('Test recipient added successfully.'),
-                        indicator: 'green'
-                    });
+                    if (window.whatsapp_evolution_ui && window.whatsapp_evolution_ui.alert) {
+                        window.whatsapp_evolution_ui.alert(__('Test recipient added successfully.'), 'success');
+                    } else {
+                        frappe.show_alert({
+                            message: __('Test recipient added successfully.'),
+                            indicator: 'green'
+                        });
+                    }
                 }
             });
             d.show();
