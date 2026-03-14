@@ -159,7 +159,8 @@
   },
   {
    "fieldname": "section_break_iyjf",
-   "fieldtype": "Section Break"
+   "fieldtype": "Section Break",
+   "label": "Reply Context"
   },
   {
    "default": "0",
@@ -174,7 +175,8 @@
   },
   {
    "fieldname": "section_break_dhba",
-   "fieldtype": "Section Break"
+   "fieldtype": "Section Break",
+   "label": "Reference"
   },
   {
    "fieldname": "reference_doctype",

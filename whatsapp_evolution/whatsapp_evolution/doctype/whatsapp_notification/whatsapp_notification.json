@@ -116,7 +116,8 @@
    "default": "0",
    "fieldname": "send_to_all_assignees",
    "fieldtype": "Check",
-   "label": "Send To All Assignees"
+   "label": "Send To All Assignees",
+   "description": "Send to users assigned to the document."
   },
   {
    "fieldname": "recipients",
@@ -128,7 +129,8 @@
    "fieldname": "condition",
    "fieldtype": "Code",
    "label": "Condition",
-   "options": "Python Expression"
+   "options": "Python Expression",
+   "description": "Optional condition to filter when the notification should send."
   },
   {
    "description": "Optional mobile number field. Leave blank to auto-fetch from linked Contact/party.",
@@ -149,7 +151,8 @@
   },
   {
    "fieldname": "section_break_11",
-   "fieldtype": "Section Break"
+   "fieldtype": "Section Break",
+   "label": "Send Settings"
   },
   {
    "fieldname": "code",

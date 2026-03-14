@@ -69,7 +69,8 @@
    "fieldname": "url",
    "fieldtype": "Data",
    "hidden": 1,
-   "label": "API URL"
+   "label": "API URL",
+   "description": "Meta Graph API base URL."
   },
   {
    "default": "v17.0",
@@ -90,7 +91,8 @@
    "fieldtype": "Data",
    "hidden": 1,
    "label": "Webhook Verify Token",
-   "unique": 1
+   "unique": 1,
+   "description": "Token used to verify incoming webhook requests."
   },
   {
    "fieldname": "business_id",
@@ -108,7 +110,8 @@
    "fieldname": "token",
    "fieldtype": "Password",
    "hidden": 1,
-   "label": "Token"
+   "label": "Token",
+   "description": "Access token for Meta Cloud API."
   },
   {
    "fieldname": "section_break_evolution",

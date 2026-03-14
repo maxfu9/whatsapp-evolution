@@ -21,12 +21,14 @@
   {
    "fieldname": "evolution_api_base",
    "fieldtype": "Data",
-   "label": "Evolution API Base"
+   "label": "Evolution API Base",
+   "description": "Base URL for your Evolution API instance."
   },
   {
    "fieldname": "evolution_api_token",
    "fieldtype": "Password",
-   "label": "Evolution API Token"
+   "label": "Evolution API Token",
+   "description": "API token used to authenticate Evolution requests."
   },
   {
    "description": "Optional override. Example: /message/sendText/{instance}",

@@ -107,7 +107,8 @@
   {
    "fieldname": "sample_values",
    "fieldtype": "Small Text",
-   "label": "Sample Values"
+   "label": "Sample Values",
+   "description": "Comma-separated sample values for placeholders."
   },
   {
    "fieldname": "column_break_bthp",
@@ -115,7 +116,8 @@
   },
   {
    "fieldname": "section_break_fxqh",
-   "fieldtype": "Section Break"
+   "fieldtype": "Section Break",
+   "label": "Meta Mapping"
   },
   {
    "fieldname": "actual_name",
@@ -129,11 +131,13 @@
    "fieldtype": "Link",
    "label": "For DocType",
    "options": "DocType",
-   "in_list_view": 1
+   "in_list_view": 1,
+   "description": "Limit template usage to a specific DocType."
   },
   {
    "fieldname": "section_break_lupb",
-   "fieldtype": "Section Break"
+   "fieldtype": "Section Break",
+   "label": "Field Mapping"
   },
   {
    "fieldname": "column_break_tbvf",
@@ -153,7 +157,8 @@
   },
   {
    "fieldname": "section_break_wu2vp",
-   "fieldtype": "Section Break"
+   "fieldtype": "Section Break",
+   "label": "Buttons"
   },
   {
    "fieldname": "whatsapp_account",
