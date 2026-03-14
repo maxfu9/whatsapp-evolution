@@ -72,7 +72,7 @@ frappe.ui.form.on('WhatsApp Recipient List', {
                     d.hide();
                     
                     frappe.show_alert({
-                        message: __('Test recipient added.'),
+                        message: __('Test recipient added successfully.'),
                         indicator: 'green'
                     });
                 }
