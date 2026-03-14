@@ -31,7 +31,7 @@ function send_read_receipt(frm) {
 		method: "send_read_receipt",
 		callback: function(r) {
 			if (r && r.message) {
-				frappe.msgprint(__('Marked as read'));
+				frappe.msgprint(__('Marked as read.'));
 			}
 		}
 	});

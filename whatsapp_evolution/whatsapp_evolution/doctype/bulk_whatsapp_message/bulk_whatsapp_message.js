@@ -57,22 +57,22 @@ frappe.ui.form.on('Bulk WhatsApp Message', {
     },
     validate: function(frm) {
         if(frm.doc.recipient_type == 'Individual' && (!frm.doc.recipients || frm.doc.recipients.length === 0)) {
-            frappe.throw(__('Please add at least one recipient'));
+            frappe.throw(__('Please add at least one recipient.'));
             return false;
         }
         
         if(frm.doc.recipient_type == 'Recipient List' && !frm.doc.recipient_list) {
-            frappe.throw(__('Please select a recipient list'));
+            frappe.throw(__('Please select a recipient list.'));
             return false;
         }
         
         if(frm.doc.use_template && !frm.doc.template) {
-            frappe.throw(__('Please select a template'));
+            frappe.throw(__('Please select a template.'));
             return false;
         }
         
         if(!frm.doc.use_template && !frm.doc.message_content) {
-            frappe.throw(__('Please enter message content'));
+            frappe.throw(__('Please enter message content.'));
             return false;
         }
         

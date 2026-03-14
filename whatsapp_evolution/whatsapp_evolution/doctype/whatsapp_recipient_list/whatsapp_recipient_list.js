@@ -2,7 +2,7 @@ frappe.ui.form.on('WhatsApp Recipient List', {
     refresh: function(frm) {
         frm.fields_dict.import_button.onclick = function() {
             if(!frm.doc.doctype_to_import) {
-                frappe.throw(__('Please select a DocType before importing'));
+                frappe.throw(__('Please select a DocType before importing.'));
                 return;
             }
             
@@ -11,7 +11,7 @@ frappe.ui.form.on('WhatsApp Recipient List', {
                 try {
                     filters = JSON.parse(frm.doc.import_filters);
                 } catch(e) {
-                    frappe.throw(__('Invalid JSON in Filters field'));
+                    frappe.throw(__('Invalid JSON in filters field.'));
                     return;
                 }
             }
@@ -29,7 +29,7 @@ frappe.ui.form.on('WhatsApp Recipient List', {
                 },
                 callback: function(r) {
                     if(r.message) {
-                        frappe.msgprint(__(`${r.message} recipients imported successfully`));
+                        frappe.msgprint(__(`${r.message} recipients imported successfully.`));
                         frm.reload_doc();
                     }
                 }
@@ -48,7 +48,7 @@ frappe.ui.form.on('WhatsApp Recipient List', {
                 primary_action_label: __('Add'),
                 primary_action: function(values) {
                     if(!values.mobile_number) {
-                        frappe.throw(__('Mobile Number is required'));
+                        frappe.throw(__('Mobile number is required.'));
                         return;
                     }
                     
@@ -57,7 +57,7 @@ frappe.ui.form.on('WhatsApp Recipient List', {
                         try {
                             JSON.parse(values.recipient_data);
                         } catch(e) {
-                            frappe.throw(__('Invalid JSON in Recipient Data field'));
+                            frappe.throw(__('Invalid JSON in recipient data field.'));
                             return;
                         }
                     }
@@ -72,7 +72,7 @@ frappe.ui.form.on('WhatsApp Recipient List', {
                     d.hide();
                     
                     frappe.show_alert({
-                        message: __('Test recipient added'),
+                        message: __('Test recipient added.'),
                         indicator: 'green'
                     });
                 }
@@ -119,7 +119,7 @@ frappe.ui.form.on('WhatsApp Recipient List', {
                 frappe.msgprint({
                     title: __('Validation Results'),
                     indicator: 'green',
-                    message: __('All recipients have valid numbers')
+                    message: __('All recipients have valid numbers.')
                 });
             }
         });

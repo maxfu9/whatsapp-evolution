@@ -81,11 +81,11 @@ frappe.notification = {
 				callback: function (response) {
 					if (response.message && response.message.length > 0) {
 					} else {
-						frappe.msgprint(__('No alerts for today'));
+						frappe.msgprint(__('No alerts for today.'));
 					}
 				},
 				error: function (error) {
-					frappe.msgprint(__('Failed to trigger notifications'));
+					frappe.msgprint(__('Failed to trigger notifications.'));
 				}
 			});
 		});

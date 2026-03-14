@@ -163,7 +163,7 @@ function open_whatsapp_dialog(frm) {
 		primary_action_label: __("Send"),
 		primary_action(values) {
 			if (values.send_mode === "Custom" && values.content_type !== "text" && !values.attach && !values.attach_document_print) {
-				frappe.msgprint(__("Please attach a file or select 'Attach Document Print'"));
+				frappe.msgprint(__("Please attach a file or select 'Attach Document Print'."));
 				return;
 			}
 			send_whatsapp_message(frm, dialog, values);
@@ -220,7 +220,7 @@ function toggle_attachment_field(dialog) {
 
 function send_whatsapp_message(frm, dialog, values) {
 	if (!values || !values.mobile_no) {
-		frappe.msgprint(__("Please enter a valid mobile number"));
+		frappe.msgprint(__("Please enter a valid mobile number."));
 		return;
 	}
 
@@ -238,7 +238,7 @@ function send_whatsapp_message(frm, dialog, values) {
 
 	if (is_template) {
 		if (!values.template) {
-			frappe.msgprint(__("Please select a template"));
+			frappe.msgprint(__("Please select a template."));
 			return;
 		}
 		args.template = values.template;
