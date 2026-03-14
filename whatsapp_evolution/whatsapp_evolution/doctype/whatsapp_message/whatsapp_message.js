@@ -31,7 +31,11 @@ function send_read_receipt(frm) {
 		method: "send_read_receipt",
 		callback: function(r) {
 			if (r && r.message) {
-				frappe.msgprint(__('Marked as read.'));
+				if (window.whatsapp_evolution_ui && window.whatsapp_evolution_ui.msgprint) {
+					window.whatsapp_evolution_ui.msgprint(__('Marked as read.'), 'success');
+				} else {
+					frappe.msgprint(__('Marked as read.'));
+				}
 			}
 		}
 	});

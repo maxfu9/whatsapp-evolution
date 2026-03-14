@@ -178,7 +178,11 @@ function open_customer_statement_whatsapp_dialog(frm) {
 		primary_action_label: __("Send"),
 		primary_action(values) {
 			if (values.send_mode === "Template" && !values.template) {
-				frappe.msgprint(__("Please select a template."));
+				if (window.whatsapp_evolution_ui && window.whatsapp_evolution_ui.msgprint) {
+					window.whatsapp_evolution_ui.msgprint(__("Please select a template."), "warning");
+				} else {
+					frappe.msgprint(__("Please select a template."));
+				}
 				return;
 			}
 			send_customer_statement(frm, dialog, values);

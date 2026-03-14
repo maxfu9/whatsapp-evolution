@@ -29,7 +29,11 @@ frappe.ui.form.on('WhatsApp Recipient List', {
                 },
                 callback: function(r) {
                     if(r.message) {
-                        frappe.msgprint(__(`${r.message} recipients imported successfully.`));
+                        if (window.whatsapp_evolution_ui && window.whatsapp_evolution_ui.msgprint) {
+                            window.whatsapp_evolution_ui.msgprint(__(`${r.message} recipients imported successfully.`), 'success');
+                        } else {
+                            frappe.msgprint(__(`${r.message} recipients imported successfully.`));
+                        }
                         frm.reload_doc();
                     }
                 }

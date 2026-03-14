@@ -163,7 +163,11 @@ function open_whatsapp_dialog(frm) {
 		primary_action_label: __("Send"),
 		primary_action(values) {
 			if (values.send_mode === "Custom" && values.content_type !== "text" && !values.attach && !values.attach_document_print) {
-				frappe.msgprint(__("Please attach a file or select 'Attach Document Print'."));
+				if (window.whatsapp_evolution_ui && window.whatsapp_evolution_ui.msgprint) {
+					window.whatsapp_evolution_ui.msgprint(__("Please attach a file or select 'Attach Document Print'."), "warning");
+				} else {
+					frappe.msgprint(__("Please attach a file or select 'Attach Document Print'."));
+				}
 				return;
 			}
 			send_whatsapp_message(frm, dialog, values);
@@ -220,7 +224,11 @@ function toggle_attachment_field(dialog) {
 
 function send_whatsapp_message(frm, dialog, values) {
 	if (!values || !values.mobile_no) {
-		frappe.msgprint(__("Please enter a valid mobile number."));
+		if (window.whatsapp_evolution_ui && window.whatsapp_evolution_ui.msgprint) {
+			window.whatsapp_evolution_ui.msgprint(__("Please enter a valid mobile number."), "warning");
+		} else {
+			frappe.msgprint(__("Please enter a valid mobile number."));
+		}
 		return;
 	}
 
@@ -238,7 +246,11 @@ function send_whatsapp_message(frm, dialog, values) {
 
 	if (is_template) {
 		if (!values.template) {
-			frappe.msgprint(__("Please select a template."));
+			if (window.whatsapp_evolution_ui && window.whatsapp_evolution_ui.msgprint) {
+				window.whatsapp_evolution_ui.msgprint(__("Please select a template."), "warning");
+			} else {
+				frappe.msgprint(__("Please select a template."));
+			}
 			return;
 		}
 		args.template = values.template;
@@ -339,6 +351,24 @@ window.whatsapp_evolution_ui.alert = function (message, level = "info", opts = {
 		},
 		opts.duration
 	);
+};
+
+window.whatsapp_evolution_ui.msgprint = function (message, level = "info", opts = {}) {
+	const indicators = {
+		success: "green",
+		info: "blue",
+		warning: "orange",
+		error: "red"
+	};
+	const indicator = indicators[level] || indicators.info;
+	const payload = {
+		message,
+		indicator
+	};
+	if (opts.title) {
+		payload.title = opts.title;
+	}
+	frappe.msgprint(payload);
 };
 
 function autofill_contact_and_mobile_from_doc(frm, dialog) {
