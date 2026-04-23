@@ -9,6 +9,7 @@
   "section_break_evolution",
   "evolution_api_base",
   "evolution_api_token",
+  "evolution_api_version",
   "evolution_send_endpoint",
   "attachment_delivery_mode"
  ],
@@ -27,6 +28,14 @@
    "fieldname": "evolution_api_token",
    "fieldtype": "Password",
    "label": "Evolution API Token"
+  },
+  {
+   "default": "v1",
+   "description": "Controls whether Evolution requests are sent using v1 or v2 payload format.",
+   "fieldname": "evolution_api_version",
+   "fieldtype": "Select",
+   "label": "Evolution API Version",
+   "options": "v1\nv2"
   },
   {
    "description": "Optional override. Example: /message/sendText/{instance}",

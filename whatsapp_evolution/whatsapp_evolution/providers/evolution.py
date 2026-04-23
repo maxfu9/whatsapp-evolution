@@ -3,6 +3,7 @@ import requests
 import base64
 import hashlib
 import json
+import mimetypes
 from .base import BaseProvider
 
 
@@ -12,6 +13,9 @@ class EvolutionProvider(BaseProvider):
         self.api_base = (settings.get("evolution_api_base") or "").rstrip("/")
         self.token = settings.get("evolution_api_token")
         self.instance = (settings.get("evolution_instance") or "").strip().strip("/")
+        self.api_version = (settings.get("evolution_api_version") or "v1").strip().lower()
+        if self.api_version not in {"v1", "v2"}:
+            self.api_version = "v1"
         self.send_endpoint = (settings.get("evolution_send_endpoint") or "").strip()
 
     def _headers(self):
@@ -87,20 +91,84 @@ class EvolutionProvider(BaseProvider):
             return "SessionError: No sessions"
         return ""
 
+    def _ordered_payloads(self, preferred, fallback):
+        return preferred + fallback if self.api_version == "v2" else fallback + preferred
+
+    def _text_payload_variants(self, to_number, message):
+        v2_payloads = [
+            {"number": to_number, "text": message},
+            {"to": to_number, "text": message},
+        ]
+        v1_payloads = [
+            {"number": to_number, "textMessage": {"text": message}},
+            {
+                "number": to_number,
+                "textMessage": {"text": message},
+                "options": {"delay": 1200, "presence": "composing"},
+            },
+        ]
+        return self._ordered_payloads(v2_payloads, v1_payloads)
+
+    def _guess_mimetype(self, filename=None, media_type=None):
+        guessed = mimetypes.guess_type(filename or "")[0] if filename else None
+        if guessed:
+            return guessed
+        defaults = {
+            "image": "image/jpeg",
+            "video": "video/mp4",
+            "audio": "audio/mpeg",
+            "document": "application/octet-stream",
+        }
+        return defaults.get((media_type or "").lower(), "application/octet-stream")
+
+    def _media_payload_variants(self, to_number, media_type, caption="", media_value="", filename=None):
+        mime_type = self._guess_mimetype(filename=filename, media_type=media_type)
+        v2_payloads = [
+            {
+                "number": to_number,
+                "mediatype": media_type,
+                "mimetype": mime_type,
+                "media": media_value,
+                "caption": caption or "",
+                "fileName": filename or f"{media_type}.bin",
+            },
+            {
+                "to": to_number,
+                "mediatype": media_type,
+                "mimetype": mime_type,
+                "media": media_value,
+                "caption": caption or "",
+                "fileName": filename or f"{media_type}.bin",
+            },
+        ]
+        v1_payloads = [
+            {
+                "number": to_number,
+                "mediaMessage": {
+                    "mediaType": media_type,
+                    "fileName": filename or f"{media_type}.bin",
+                    "caption": caption or "",
+                    "media": media_value,
+                },
+            },
+            {
+                "number": to_number,
+                "mediaMessage": {
+                    "mediaType": media_type,
+                    "fileName": filename or f"{media_type}.bin",
+                    "caption": caption or "",
+                    "media": media_value,
+                },
+                "options": {"delay": 1200, "presence": "composing"},
+            },
+        ]
+        return self._ordered_payloads(v2_payloads, v1_payloads)
+
     def send_message(self, to_number, message, **kwargs):
         if not self._acquire_dedup("text", to_number, message or "", ttl=45):
             return {"id": "dedup-skip"}
 
-        payload_variants = [
-            {"number": to_number, "text": message},
-            {"to": to_number, "text": message},
-            {"number": to_number, "textMessage": {"text": message}},
-            {
-                "number": to_number,
-                "options": {"delay": 1200, "presence": "composing"},
-                "textMessage": {"text": message},
-            },
-        ]
+        payload_variants = self._text_payload_variants(to_number, message)
 
         errors = []
         seen_session_error = ""
@@ -146,26 +214,14 @@ class EvolutionProvider(BaseProvider):
             try:
                 encoded = base64.b64encode(media_bytes).decode("ascii")
                 media_name = filename or f"{media_type}.bin"
-                # Prefer direct base64 payload when bytes are already available.
-                payload_variants.append(
-                    {
-                        "number": to_number,
-                        "mediaMessage": {
-                            "mediatype": media_type,
-                            "media": encoded,
-                            "caption": caption or "",
-                            "fileName": media_name,
-                        },
-                    }
-                )
-                payload_variants.append(
-                    {
-                        "number": to_number,
-                        "mediatype": media_type,
-                        "media": encoded,
-                        "caption": caption or "",
-                        "fileName": media_name,
-                    }
+                payload_variants.extend(
+                    self._media_payload_variants(
+                        to_number=to_number,
+                        media_type=media_type,
+                        caption=caption,
+                        media_value=encoded,
+                        filename=media_name,
+                    )
                 )
             except Exception:
                 pass
@@ -173,50 +229,28 @@ class EvolutionProvider(BaseProvider):
         # Use URL variants only when we don't already have raw bytes.
         if media_url and not media_bytes:
             payload_variants.extend(
-                [
-                    {
-                        "number": to_number,
-                        "mediaMessage": {
-                            "mediatype": media_type,
-                            "media": media_url,
-                            "caption": caption or "",
-                        },
-                    },
-                    {
-                        "number": to_number,
-                        "mediatype": media_type,
-                        "media": media_url,
-                        "caption": caption or "",
-                    },
-                    {
-                        "to": to_number,
-                        "mediatype": media_type,
-                        "media": media_url,
-                        "caption": caption or "",
-                    },
-                ]
+                self._media_payload_variants(
+                    to_number=to_number,
+                    media_type=media_type,
+                    caption=caption,
+                    media_value=media_url,
+                    filename=filename or media_url.rstrip("/").split("/")[-1] or f"{media_type}.bin",
+                )
             )
             # Optional base64 fallback for Evolution setups that do not accept remote URLs.
             try:
                 response = requests.get(media_url, timeout=20)
                 response.raise_for_status()
                 encoded = base64.b64encode(response.content).decode("ascii")
-                payload_variants.append({
-                    "number": to_number,
-                    "mediatype": media_type,
-                    "media": encoded,
-                    "caption": caption or "",
-                    "fileName": media_url.rstrip("/").split("/")[-1] or f"{media_type}.bin",
-                })
-                payload_variants.append({
-                    "number": to_number,
-                    "mediaMessage": {
-                        "mediatype": media_type,
-                        "media": encoded,
-                        "caption": caption or "",
-                        "fileName": media_url.rstrip("/").split("/")[-1] or f"{media_type}.bin",
-                    },
-                })
+                payload_variants.extend(
+                    self._media_payload_variants(
+                        to_number=to_number,
+                        media_type=media_type,
+                        caption=caption,
+                        media_value=encoded,
+                        filename=filename or media_url.rstrip("/").split("/")[-1] or f"{media_type}.bin",
+                    )
+                )
             except Exception:
                 pass
 

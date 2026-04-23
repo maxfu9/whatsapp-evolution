@@ -258,11 +258,15 @@ def get_evolution_settings(whatsapp_account=None):
         (account_doc.get("evolution_send_endpoint") if account_doc else None)
         or settings_doc.get("evolution_send_endpoint")
     )
+    api_version = (settings_doc.get("evolution_api_version") or "v1").strip().lower()
+    if api_version not in {"v1", "v2"}:
+        api_version = "v1"
 
     return {
         "evolution_api_base": base,
         "evolution_api_token": token,
         "evolution_instance": instance,
+        "evolution_api_version": api_version,
         "evolution_send_endpoint": send_endpoint,
         "whatsapp_account": account_doc.name if account_doc else None,
     }

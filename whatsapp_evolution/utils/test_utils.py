@@ -8,6 +8,7 @@ from whatsapp_evolution.testing import IntegrationTestCase
 
 from whatsapp_evolution.utils import (
     format_number,
+    get_evolution_settings,
     get_notifications_map,
     get_whatsapp_account,
     run_server_script_for_doc_event,
@@ -149,6 +150,26 @@ class TestGetNotificationsMap(IntegrationTestCase):
         self.assertIn("User", result)
         self.assertIn("After Save", result["User"])
         self.assertIn("Test Utils Map Notif", result["User"]["After Save"])
+
+
+class TestGetEvolutionSettings(IntegrationTestCase):
+    """Tests for Evolution settings helper."""
+
+    def test_defaults_api_version_to_v1(self):
+        settings = frappe.get_single("WhatsApp Settings")
+        settings.evolution_api_version = ""
+        settings.save(ignore_permissions=True)
+
+        effective = get_evolution_settings()
+        self.assertEqual(effective.get("evolution_api_version"), "v1")
+
+    def test_uses_selected_api_version(self):
+        settings = frappe.get_single("WhatsApp Settings")
+        settings.evolution_api_version = "v2"
+        settings.save(ignore_permissions=True)
+
+        effective = get_evolution_settings()
+        self.assertEqual(effective.get("evolution_api_version"), "v2")
 
 
 class TestRunServerScriptForDocEvent(IntegrationTestCase):
