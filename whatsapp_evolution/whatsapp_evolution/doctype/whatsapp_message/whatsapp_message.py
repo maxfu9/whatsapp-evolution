@@ -1123,8 +1123,8 @@ def send_template(
 ):
     template_account = frappe.db.get_value("WhatsApp Templates", template, "whatsapp_account") if template else None
     selected_account = _resolve_evolution_account(
-        preferred_account=template_account,
-        template_account=whatsapp_account,
+        preferred_account=whatsapp_account,
+        template_account=template_account,
     )
     queue_name = _create_queue_placeholder(
         to=to,
@@ -1177,8 +1177,8 @@ def send_template_now(
         sent_doc = None
         template_account = frappe.db.get_value("WhatsApp Templates", template, "whatsapp_account") if template else None
         selected_account = _resolve_evolution_account(
-            preferred_account=template_account,
-            template_account=whatsapp_account,
+            preferred_account=whatsapp_account,
+            template_account=template_account,
         )
         if not is_evolution_enabled(whatsapp_account=selected_account):
             frappe.throw(

@@ -10,6 +10,7 @@
   "evolution_api_base",
   "evolution_api_token",
   "evolution_api_version",
+  "evolution_strict_api_version",
   "evolution_send_endpoint",
   "attachment_delivery_mode"
  ],
@@ -36,6 +37,13 @@
    "fieldtype": "Select",
    "label": "Evolution API Version",
    "options": "v1\nv2"
+  },
+  {
+   "default": "0",
+   "description": "Only send payloads and endpoints for the selected Evolution API version. Leave disabled while migrating mixed Evolution servers.",
+   "fieldname": "evolution_strict_api_version",
+   "fieldtype": "Check",
+   "label": "Strict API Version"
   },
   {
    "description": "Optional override. Example: /message/sendText/{instance}",

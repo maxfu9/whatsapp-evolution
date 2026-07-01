@@ -17,6 +17,8 @@
   "evolution_instance",
   "column_break_qx",
   "evolution_send_endpoint",
+  "evolution_api_version",
+  "evolution_strict_api_version",
   "evolution_api_base",
   "column_break_qy",
   "evolution_api_token"
@@ -125,6 +127,20 @@
    "fieldname": "evolution_send_endpoint",
    "fieldtype": "Data",
    "label": "Evolution Send Endpoint"
+  },
+  {
+   "description": "Optional. If empty, WhatsApp Settings value is used.",
+   "fieldname": "evolution_api_version",
+   "fieldtype": "Select",
+   "label": "Evolution API Version",
+   "options": "\nv1\nv2"
+  },
+  {
+   "description": "Optional. If empty, WhatsApp Settings value is used.",
+   "fieldname": "evolution_strict_api_version",
+   "fieldtype": "Select",
+   "label": "Strict API Version",
+   "options": "\nNo\nYes"
   },
   {
    "description": "Optional. If empty, WhatsApp Settings value is used.",

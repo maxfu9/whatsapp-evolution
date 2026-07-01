@@ -4,6 +4,7 @@ import base64
 import hashlib
 import json
 import mimetypes
+from urllib.parse import urlparse, unquote
 from .base import BaseProvider
 
 
@@ -16,7 +17,13 @@ class EvolutionProvider(BaseProvider):
         self.api_version = (settings.get("evolution_api_version") or "v1").strip().lower()
         if self.api_version not in {"v1", "v2"}:
             self.api_version = "v1"
+        self.strict_api_version = self._truthy(settings.get("evolution_strict_api_version"))
         self.send_endpoint = (settings.get("evolution_send_endpoint") or "").strip()
+
+    def _truthy(self, value):
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+        return bool(value)
 
     def _headers(self):
         return {
@@ -24,6 +31,16 @@ class EvolutionProvider(BaseProvider):
             "apikey": self.token or "",
             "Content-Type": "application/json",
         }
+
+    def _success_result(self, response):
+        try:
+            return response.json()
+        except ValueError:
+            return {
+                "ok": True,
+                "status_code": response.status_code,
+                "text": response.text or "",
+            }
 
     def _dedup_key(self, kind, to_number, content_hash):
         return f"wa_evo_out:{kind}:{to_number}:{content_hash}"
@@ -45,33 +62,50 @@ class EvolutionProvider(BaseProvider):
             return path_or_url.rstrip("/")
         return f"{self.api_base}/{path_or_url.lstrip('/')}".rstrip("/")
 
-    def _text_candidate_urls(self):
-        urls = []
-        if self.send_endpoint:
-            urls.append(self._build_url(self.send_endpoint))
-            if self.instance and "{instance}" in self.send_endpoint:
-                urls.append(self._build_url(self.send_endpoint.replace("{instance}", self.instance)))
-        if self.instance:
-            urls.extend(
-                [
-                    self._build_url(f"/message/sendText/{self.instance}"),
-                    self._build_url(f"/messages/{self.instance}"),
-                ]
-            )
-        urls.extend([self._build_url("/message/sendText"), self._build_url("/messages")])
+    def _custom_candidate_urls(self):
+        if not self.send_endpoint:
+            return []
+        if "{instance}" in self.send_endpoint:
+            if not self.instance:
+                return []
+            return [self._build_url(self.send_endpoint.replace("{instance}", self.instance))]
+        return [self._build_url(self.send_endpoint)]
+
+    def _dedupe_urls(self, urls):
         return [u for i, u in enumerate(urls) if u and u not in urls[:i]]
 
-    def _media_candidate_urls(self):
-        urls = []
+    def _ordered_urls(self, preferred, fallback):
+        if self.strict_api_version:
+            return self._dedupe_urls(self._custom_candidate_urls() + preferred)
+        return self._dedupe_urls(self._custom_candidate_urls() + preferred + fallback)
+
+    def _text_candidate_urls(self):
+        preferred = []
+        fallback = []
         if self.instance:
-            urls.extend(
+            preferred.extend(
                 [
-                    self._build_url(f"/message/sendMedia/{self.instance}"),
-                    self._build_url(f"/messages/{self.instance}"),
+                    self._build_url(f"/message/sendText/{self.instance}"),
                 ]
             )
-        urls.extend([self._build_url("/message/sendMedia"), self._build_url("/messages")])
-        return [u for i, u in enumerate(urls) if u and u not in urls[:i]]
+            fallback.append(self._build_url(f"/messages/{self.instance}"))
+        preferred.append(self._build_url("/message/sendText"))
+        fallback.append(self._build_url("/messages"))
+        return self._ordered_urls(preferred, fallback)
+
+    def _media_candidate_urls(self):
+        preferred = []
+        fallback = []
+        if self.instance:
+            preferred.extend(
+                [
+                    self._build_url(f"/message/sendMedia/{self.instance}"),
+                ]
+            )
+            fallback.append(self._build_url(f"/messages/{self.instance}"))
+        preferred.append(self._build_url("/message/sendMedia"))
+        fallback.append(self._build_url("/messages"))
+        return self._ordered_urls(preferred, fallback)
 
     def _extract_session_error(self, response):
         """Return Evolution session error text if present in response body."""
@@ -91,8 +125,125 @@ class EvolutionProvider(BaseProvider):
             return "SessionError: No sessions"
         return ""
 
+    def _instance_record_name(self, record):
+        if not isinstance(record, dict):
+            return ""
+        nested = record.get("instance") if isinstance(record.get("instance"), dict) else {}
+        return (
+            record.get("instanceName")
+            or record.get("instance_name")
+            or record.get("name")
+            or nested.get("instanceName")
+            or nested.get("instance_name")
+            or nested.get("name")
+            or ""
+        )
+
+    def _instance_connection_state(self, record):
+        if not isinstance(record, dict):
+            return ""
+        nested = record.get("instance") if isinstance(record.get("instance"), dict) else {}
+        value = (
+            record.get("state")
+            or record.get("connectionState")
+            or record.get("connectionStatus")
+            or record.get("status")
+            or nested.get("state")
+            or nested.get("connectionState")
+            or nested.get("connectionStatus")
+            or nested.get("status")
+            or ""
+        )
+        return str(value).strip().lower()
+
+    def _iter_instance_records(self, body):
+        if isinstance(body, list):
+            return [row for row in body if isinstance(row, dict)]
+        if not isinstance(body, dict):
+            return []
+        for key in ("instances", "data", "response"):
+            value = body.get(key)
+            if isinstance(value, list):
+                return [row for row in value if isinstance(row, dict)]
+            if isinstance(value, dict):
+                nested = self._iter_instance_records(value)
+                if nested:
+                    return nested
+        return [body]
+
+    def _connection_result_from_body(self, body, url, require_instance_match=False):
+        records = self._iter_instance_records(body)
+        target = (self.instance or "").strip()
+        if require_instance_match and target:
+            matched = [row for row in records if self._instance_record_name(row) == target]
+            if not matched:
+                return {
+                    "ok": False,
+                    "status": "disconnected",
+                    "message": f"Instance '{target}' not found in Evolution response",
+                    "url": url,
+                    "data": body,
+                }
+            records = matched
+
+        states = [self._instance_connection_state(row) for row in records]
+        state_text = " ".join([state for state in states if state])
+        if any(state in {"open", "connected", "online"} for state in states):
+            return {"ok": True, "status": "connected", "url": url, "data": body}
+        if any(state in {"close", "closed", "disconnected", "offline"} for state in states):
+            return {"ok": False, "status": "disconnected", "url": url, "data": body}
+        if require_instance_match:
+            return {
+                "ok": False,
+                "status": "unknown",
+                "message": f"Instance '{target}' state is unknown{': ' + state_text if state_text else ''}",
+                "url": url,
+                "data": body,
+            }
+        return {"ok": True, "status": "reachable", "url": url, "data": body}
+
     def _ordered_payloads(self, preferred, fallback):
-        return preferred + fallback if self.api_version == "v2" else fallback + preferred
+        if self.api_version == "v2":
+            return preferred if self.strict_api_version else preferred + fallback
+        return fallback if self.strict_api_version else fallback + preferred
+
+    def _payload_shape(self, payload):
+        if payload.get("textMessage"):
+            return "v1_text"
+        if payload.get("mediaMessage"):
+            return "v1_media"
+        if "mediatype" in payload:
+            return "v2_media"
+        if "text" in payload:
+            return "v2_text"
+        return "unknown"
+
+    def _media_payload_mode(self, payload):
+        media = payload.get("media")
+        if media is None and isinstance(payload.get("mediaMessage"), dict):
+            media = payload.get("mediaMessage").get("media")
+        return "url" if isinstance(media, str) and media.startswith(("http://", "https://")) else "base64"
+
+    def _log_send_outcome(self, kind, outcome, url=None, payload_shape=None, response=None, error=None):
+        try:
+            details = {
+                "kind": kind,
+                "outcome": outcome,
+                "api_version": self.api_version,
+                "strict_api_version": self.strict_api_version,
+            }
+            if url:
+                details["url"] = url
+            if payload_shape:
+                details["payload_shape"] = payload_shape
+            if response is not None:
+                details["status_code"] = response.status_code
+                details["response"] = (response.text or "").strip().replace("\n", " ")[:180]
+            if error:
+                details["error"] = str(error)[:180]
+            frappe.logger("whatsapp_evolution.evolution").info(json.dumps(details, ensure_ascii=False))
+        except Exception:
+            pass
 
     def _text_payload_variants(self, to_number, message):
         v2_payloads = [
@@ -120,6 +271,11 @@ class EvolutionProvider(BaseProvider):
             "document": "application/octet-stream",
         }
         return defaults.get((media_type or "").lower(), "application/octet-stream")
+
+    def _filename_from_url(self, media_url, media_type):
+        parsed = urlparse(media_url or "")
+        filename = unquote((parsed.path or "").rstrip("/").split("/")[-1])
+        return filename or f"{media_type}.bin"
 
     def _media_payload_variants(self, to_number, media_type, caption="", media_value="", filename=None):
         mime_type = self._guess_mimetype(filename=filename, media_type=media_type)
@@ -177,7 +333,8 @@ class EvolutionProvider(BaseProvider):
                 try:
                     response = requests.post(url, json=payload, headers=self._headers(), timeout=20)
                     response.raise_for_status()
-                    return response.json()
+                    self._log_send_outcome("text", "success", url, self._payload_shape(payload), response=response)
+                    return self._success_result(response)
                 except requests.HTTPError as e:
                     session_error = self._extract_session_error(e.response)
                     if session_error:
@@ -186,15 +343,17 @@ class EvolutionProvider(BaseProvider):
                     body = ""
                     if e.response is not None:
                         body = (e.response.text or "").strip().replace("\n", " ")[:180]
-                    errors.append(f"{url} -> {status_code} {body}".strip())
+                    errors.append(f"{url} [{self._payload_shape(payload)}] -> {status_code} {body}".strip())
                 except Exception as e:
-                    errors.append(f"{url} -> {str(e)}")
+                    errors.append(f"{url} [{self._payload_shape(payload)}] -> {str(e)}")
 
         if seen_session_error:
+            self._log_send_outcome("text", "failed", error=seen_session_error)
             raise frappe.ValidationError(
                 f"Evolution instance '{self.instance or '-'}' is not connected ({seen_session_error}). "
                 "Open Evolution Manager, connect the instance (QR), then retry."
             )
+        self._log_send_outcome("text", "failed", error=", ".join(errors))
         raise frappe.ValidationError(f"Evolution text send failed. Tried: {', '.join(errors)}")
 
     def send_media(self, to_number, media_url, media_type="document", caption="", media_bytes=None, filename=None):
@@ -228,13 +387,14 @@ class EvolutionProvider(BaseProvider):
 
         # Use URL variants only when we don't already have raw bytes.
         if media_url and not media_bytes:
+            media_name = filename or self._filename_from_url(media_url, media_type)
             payload_variants.extend(
                 self._media_payload_variants(
                     to_number=to_number,
                     media_type=media_type,
                     caption=caption,
                     media_value=media_url,
-                    filename=filename or media_url.rstrip("/").split("/")[-1] or f"{media_type}.bin",
+                    filename=media_name,
                 )
             )
             # Optional base64 fallback for Evolution setups that do not accept remote URLs.
@@ -248,7 +408,7 @@ class EvolutionProvider(BaseProvider):
                         media_type=media_type,
                         caption=caption,
                         media_value=encoded,
-                        filename=filename or media_url.rstrip("/").split("/")[-1] or f"{media_type}.bin",
+                        filename=media_name,
                     )
                 )
             except Exception:
@@ -261,28 +421,29 @@ class EvolutionProvider(BaseProvider):
                 try:
                     response = requests.post(url, json=payload, headers=self._headers(), timeout=25)
                     response.raise_for_status()
-                    return response.json()
+                    self._log_send_outcome("media", "success", url, self._payload_shape(payload), response=response)
+                    return self._success_result(response)
                 except requests.HTTPError as e:
                     session_error = self._extract_session_error(e.response)
                     if session_error:
                         seen_session_error = session_error
                     status_code = e.response.status_code if e.response is not None else "?"
-                    has_file_name = bool(payload.get("fileName") or (payload.get("mediaMessage") or {}).get("fileName"))
-                    mode = "base64" if has_file_name else "url"
+                    mode = self._media_payload_mode(payload)
                     body = ""
                     if e.response is not None:
                         body = (e.response.text or "").strip().replace("\n", " ")[:180]
-                    errors.append(f"{url} ({mode}) -> {status_code} {body}".strip())
+                    errors.append(f"{url} [{self._payload_shape(payload)}:{mode}] -> {status_code} {body}".strip())
                 except Exception as e:
-                    has_file_name = bool(payload.get("fileName") or (payload.get("mediaMessage") or {}).get("fileName"))
-                    mode = "base64" if has_file_name else "url"
-                    errors.append(f"{url} ({mode}) -> {str(e)}")
+                    mode = self._media_payload_mode(payload)
+                    errors.append(f"{url} [{self._payload_shape(payload)}:{mode}] -> {str(e)}")
 
         if seen_session_error:
+            self._log_send_outcome("media", "failed", error=seen_session_error)
             raise frappe.ValidationError(
                 f"Evolution instance '{self.instance or '-'}' is not connected ({seen_session_error}). "
                 "Open Evolution Manager, connect the instance (QR), then retry."
             )
+        self._log_send_outcome("media", "failed", error=", ".join(errors))
         raise frappe.ValidationError(
             f"Evolution media send failed. Tried: {', '.join(errors)}"
         )
@@ -384,12 +545,11 @@ class EvolutionProvider(BaseProvider):
                 if session_error:
                     return {"ok": False, "status": "disconnected", "message": session_error, "url": url}
 
-                raw = json.dumps(body, ensure_ascii=False).lower()
-                if any(k in raw for k in ("open", "connected", "online")):
-                    return {"ok": True, "status": "connected", "url": url, "data": body}
-                if any(k in raw for k in ("close", "closed", "disconnected", "offline")):
-                    return {"ok": False, "status": "disconnected", "url": url, "data": body}
-                return {"ok": True, "status": "reachable", "url": url, "data": body}
+                return self._connection_result_from_body(
+                    body,
+                    url,
+                    require_instance_match="fetchInstances" in url,
+                )
             except Exception as e:
                 last_error = f"{url} -> {str(e)}"
 
@@ -476,7 +636,7 @@ def _numbers_match(a, b):
     return da.endswith(db[-10:]) or db.endswith(da[-10:])
 
 
-def _find_recent_outgoing_by_number(remote_jid, instance_name=None):
+def _find_recent_outgoing_by_number(remote_jid, account_name=None):
     number = (remote_jid or "").split("@")[0]
     if not number:
         return None
@@ -493,10 +653,9 @@ def _find_recent_outgoing_by_number(remote_jid, instance_name=None):
     )
 
     candidates = [r for r in rows if _numbers_match(r.get("to"), number)]
-    if instance_name:
-        inst_candidates = [r for r in candidates if (r.get("whatsapp_account") or "") == instance_name]
-        if inst_candidates:
-            candidates = inst_candidates
+    if account_name:
+        account_candidates = [r for r in candidates if (r.get("whatsapp_account") or "") == account_name]
+        return account_candidates[0] if account_candidates else None
 
     return candidates[0] if candidates else None
 
@@ -530,6 +689,18 @@ def _extract_instance_name(data, payload_data):
     )
 
 
+def _account_name_from_instance(instance_name):
+    if not instance_name:
+        return None
+    if frappe.db.exists("WhatsApp Account", {"name": instance_name, "status": "Active"}):
+        return instance_name
+    return frappe.db.get_value(
+        "WhatsApp Account",
+        {"evolution_instance": instance_name, "status": "Active"},
+        "name",
+    )
+
+
 @frappe.whitelist(allow_guest=True)
 def handle_webhook():
     data = frappe.local.request.get_json(silent=True) or {}
@@ -543,6 +714,8 @@ def handle_webhook():
     provider = EvolutionProvider(frappe.get_single("WhatsApp Settings").as_dict())
     msg = provider.parse_incoming(data)
     payload_data = _normalize_webhook_data(data)
+    instance_name = _extract_instance_name(data, payload_data)
+    account_name = _account_name_from_instance(instance_name)
     
     if event_type == "messages.upsert":
         if msg.get("is_from_me"):
@@ -554,7 +727,7 @@ def handle_webhook():
             return "OK"
             
         from whatsapp_evolution.incoming import handle_incoming_message
-        handle_incoming_message(msg)
+        handle_incoming_message(msg, whatsapp_account=account_name)
         
     elif event_type == "messages.update":
         status_code = msg.get("status")
@@ -566,7 +739,6 @@ def handle_webhook():
             remote_jid = msg.get("to")
             if remote_jid and "@" not in remote_jid:
                 remote_jid = f"{remote_jid}@s.whatsapp.net"
-        instance_name = _extract_instance_name(data, payload_data)
         status_text = _map_evolution_status(status_code)
 
         _log_webhook_debug(
@@ -585,7 +757,7 @@ def handle_webhook():
                 found_by_id = _find_message_name_by_id(message_id) if message_id else None
                 found = found_by_id
                 if not found and remote_jid:
-                    found = _find_recent_outgoing_by_number(remote_jid, instance_name=instance_name)
+                    found = _find_recent_outgoing_by_number(remote_jid, account_name=account_name)
                 if found and _status_rank(status_text) >= _status_rank(found.get("status")):
                     frappe.db.set_value("WhatsApp Message", found.get("name"), "status", status_text)
                     _log_webhook_debug(

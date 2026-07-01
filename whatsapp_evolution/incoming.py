@@ -39,13 +39,15 @@ def _find_reference_by_number(number):
     return None, None
 
 
-def handle_incoming_message(msg):
+def handle_incoming_message(msg, whatsapp_account=None):
     number = (msg.get("from") or "").strip()
     message_id = (msg.get("message_id") or "").strip()
 
     if message_id:
         existing = frappe.db.get_value("WhatsApp Message", {"message_id": message_id}, "name")
         if existing:
+            if whatsapp_account and not frappe.db.get_value("WhatsApp Message", existing, "whatsapp_account"):
+                frappe.db.set_value("WhatsApp Message", existing, "whatsapp_account", whatsapp_account)
             return existing
 
     if not number:
@@ -61,6 +63,7 @@ def handle_incoming_message(msg):
             "message": msg.get("body"),
             "message_id": message_id,
             "content_type": "text",
+            "whatsapp_account": whatsapp_account or "",
             "reference_doctype": reference_doctype,
             "reference_name": reference_name,
         }

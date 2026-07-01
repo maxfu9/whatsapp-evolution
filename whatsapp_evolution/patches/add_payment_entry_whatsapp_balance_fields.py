@@ -1,3 +1,5 @@
+import frappe
+
 from whatsapp_evolution.setup import setup_custom_fields
 
 

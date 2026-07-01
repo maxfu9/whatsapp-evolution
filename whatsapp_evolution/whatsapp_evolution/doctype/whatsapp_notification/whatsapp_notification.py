@@ -53,17 +53,43 @@ def _render_template_text(template_text, params):
 def _extract_response_message_id(response):
     if not isinstance(response, dict):
         return ""
-    msg_id = response.get("id") or response.get("message_id")
-    if msg_id:
-        return str(msg_id)
-    key = response.get("key") or {}
-    if isinstance(key, dict) and key.get("id"):
-        return str(key.get("id"))
-    messages = response.get("messages") or []
-    if isinstance(messages, list) and messages:
-        first = messages[0] or {}
-        if isinstance(first, dict) and first.get("id"):
-            return str(first.get("id"))
+
+    def _pick_id(payload):
+        if not isinstance(payload, dict):
+            return ""
+        msg_id = payload.get("id") or payload.get("message_id")
+        if msg_id:
+            return str(msg_id)
+        key = payload.get("key") or {}
+        if isinstance(key, dict) and key.get("id"):
+            return str(key.get("id"))
+        status_data = payload.get("status") or {}
+        if isinstance(status_data, dict):
+            nested_key = status_data.get("key") or {}
+            if isinstance(nested_key, dict) and nested_key.get("id"):
+                return str(nested_key.get("id"))
+        messages = payload.get("messages") or []
+        if isinstance(messages, list) and messages:
+            first = messages[0] or {}
+            if isinstance(first, dict):
+                mid = first.get("id") or ((first.get("key") or {}).get("id") if isinstance(first.get("key"), dict) else None)
+                if mid:
+                    return str(mid)
+        return ""
+
+    direct = _pick_id(response)
+    if direct:
+        return direct
+    data = response.get("data")
+    if isinstance(data, list):
+        for item in data:
+            nested = _pick_id(item)
+            if nested:
+                return nested
+    elif isinstance(data, dict):
+        nested = _pick_id(data)
+        if nested:
+            return nested
     return ""
 
 

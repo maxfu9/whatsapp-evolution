@@ -32,6 +32,7 @@ def import_recipients(list_name, doctype, mobile_field=None, name_field=None, fi
             frappe.throw("Invalid JSON in data_fields")
         
     doc = frappe.get_doc("WhatsApp Recipient List", list_name)
+    doc.check_permission("write")
     count = doc.import_list_from_doctype(doctype, mobile_field, name_field, filters, limit, data_fields)
     doc.save()
     

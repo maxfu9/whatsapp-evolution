@@ -244,6 +244,11 @@ class WhatsAppRecipientList(Document):
 
 	def import_list_from_doctype(self, doctype, mobile_field=None, name_field=None, filters=None, limit=None, data_fields=None):
 		"""Import recipients from another DocType"""
+		if not doctype or not frappe.db.exists("DocType", doctype):
+			frappe.throw(_("Invalid DocType"))
+		if not frappe.has_permission(doctype, ptype="read"):
+			frappe.throw(_("Not permitted to read {0}").format(_(doctype)))
+
 		self.doctype_to_import = doctype
 		self.mobile_field = mobile_field or ""
 		self.import_filters = json.dumps(filters) if isinstance(filters, (dict, list)) else (filters or "")
@@ -260,7 +265,7 @@ class WhatsAppRecipientList(Document):
 			data_fields=data_fields,
 		)
 		# Get records from the doctype
-		records = frappe.get_all(
+		records = frappe.get_list(
 			doctype,
 			filters=filters,
 			fields=fields,

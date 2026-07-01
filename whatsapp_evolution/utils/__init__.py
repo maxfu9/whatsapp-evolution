@@ -231,6 +231,17 @@ def get_default_evolution_account():
     return None
 
 
+def _coerce_evolution_strict_api_version(value, fallback=False):
+    if value in (None, ""):
+        return bool(fallback)
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if not normalized:
+            return bool(fallback)
+        return normalized in {"1", "true", "yes", "y", "on"}
+    return bool(value)
+
+
 def get_evolution_settings(whatsapp_account=None):
     """Build effective Evolution config from account, with global fallback."""
     settings_doc = frappe.get_single("WhatsApp Settings")
@@ -258,15 +269,24 @@ def get_evolution_settings(whatsapp_account=None):
         (account_doc.get("evolution_send_endpoint") if account_doc else None)
         or settings_doc.get("evolution_send_endpoint")
     )
-    api_version = (settings_doc.get("evolution_api_version") or "v1").strip().lower()
+    api_version = (
+        (account_doc.get("evolution_api_version") if account_doc else None)
+        or settings_doc.get("evolution_api_version")
+        or "v1"
+    ).strip().lower()
     if api_version not in {"v1", "v2"}:
         api_version = "v1"
+    strict_api_version = _coerce_evolution_strict_api_version(
+        account_doc.get("evolution_strict_api_version") if account_doc else None,
+        fallback=_coerce_evolution_strict_api_version(settings_doc.get("evolution_strict_api_version")),
+    )
 
     return {
         "evolution_api_base": base,
         "evolution_api_token": token,
         "evolution_instance": instance,
         "evolution_api_version": api_version,
+        "evolution_strict_api_version": strict_api_version,
         "evolution_send_endpoint": send_endpoint,
         "whatsapp_account": account_doc.name if account_doc else None,
     }

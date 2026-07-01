@@ -1,10 +1,12 @@
 # Copyright (c) 2025, Shridhar Patil and Contributors
 # See license.txt
 
+from unittest import TestCase
 from unittest.mock import patch, MagicMock
 
 import frappe
 from whatsapp_evolution.testing import IntegrationTestCase
+from whatsapp_evolution.whatsapp_evolution.providers.evolution import EvolutionProvider
 
 from whatsapp_evolution.utils import (
     format_number,
@@ -170,6 +172,193 @@ class TestGetEvolutionSettings(IntegrationTestCase):
 
         effective = get_evolution_settings()
         self.assertEqual(effective.get("evolution_api_version"), "v2")
+
+    def test_account_api_version_overrides_global(self):
+        settings = frappe.get_single("WhatsApp Settings")
+        settings.evolution_api_version = "v1"
+        settings.save(ignore_permissions=True)
+
+        account_name = "Test Utils Evolution V2 Account"
+        if not frappe.db.exists("WhatsApp Account", account_name):
+            account = frappe.get_doc({
+                "doctype": "WhatsApp Account",
+                "account_name": account_name,
+                "status": "Active",
+                "evolution_instance": "test-utils-v2",
+                "evolution_api_version": "v2",
+            })
+            account.insert(ignore_permissions=True)
+        else:
+            account = frappe.get_doc("WhatsApp Account", account_name)
+            account.status = "Active"
+            account.evolution_instance = "test-utils-v2"
+            account.evolution_api_version = "v2"
+            account.save(ignore_permissions=True)
+
+        effective = get_evolution_settings(account.name)
+        self.assertEqual(effective.get("evolution_api_version"), "v2")
+
+
+class TestEvolutionProviderV2(TestCase):
+    """Tests for Evolution provider v2 compatibility helpers."""
+
+    def _provider(self, api_version="v2", strict=False, send_endpoint=""):
+        return EvolutionProvider({
+            "evolution_api_base": "https://evolution.example",
+            "evolution_api_token": "test-token",
+            "evolution_instance": "test-instance",
+            "evolution_api_version": api_version,
+            "evolution_strict_api_version": strict,
+            "evolution_send_endpoint": send_endpoint,
+        })
+
+    def test_v2_text_payloads_are_preferred_for_v2(self):
+        provider = self._provider("v2")
+        payloads = provider._text_payload_variants("923001234567", "Hello")
+
+        self.assertEqual(payloads[0], {"number": "923001234567", "text": "Hello"})
+        self.assertEqual(payloads[1], {"to": "923001234567", "text": "Hello"})
+        self.assertIn("textMessage", payloads[2])
+
+    def test_v1_text_payloads_are_preferred_by_default(self):
+        provider = self._provider("unknown")
+        payloads = provider._text_payload_variants("923001234567", "Hello")
+
+        self.assertIn("textMessage", payloads[0])
+        self.assertEqual(payloads[2], {"number": "923001234567", "text": "Hello"})
+
+    def test_v2_media_payload_includes_mimetype(self):
+        provider = self._provider("v2")
+        payload = provider._media_payload_variants(
+            "923001234567",
+            "image",
+            caption="Photo",
+            media_value="abc123",
+            filename="photo.png",
+        )[0]
+
+        self.assertEqual(payload["mediatype"], "image")
+        self.assertEqual(payload["mimetype"], "image/png")
+        self.assertEqual(payload["fileName"], "photo.png")
+
+    def test_strict_v2_payloads_do_not_include_v1_fallbacks(self):
+        provider = self._provider("v2", strict=True)
+        payloads = provider._text_payload_variants("923001234567", "Hello")
+
+        self.assertEqual(len(payloads), 2)
+        self.assertTrue(all("text" in payload for payload in payloads))
+
+    def test_strict_v1_payloads_do_not_include_v2_fallbacks(self):
+        provider = self._provider("v1", strict=True)
+        payloads = provider._text_payload_variants("923001234567", "Hello")
+
+        self.assertEqual(len(payloads), 2)
+        self.assertTrue(all("textMessage" in payload for payload in payloads))
+
+    def test_strict_urls_skip_legacy_messages_endpoint(self):
+        provider = self._provider("v2", strict=True)
+
+        self.assertEqual(
+            provider._text_candidate_urls(),
+            [
+                "https://evolution.example/message/sendText/test-instance",
+                "https://evolution.example/message/sendText",
+            ],
+        )
+
+    def test_non_strict_urls_keep_legacy_messages_fallback(self):
+        provider = self._provider("v2")
+
+        self.assertIn("https://evolution.example/messages/test-instance", provider._text_candidate_urls())
+        self.assertIn("https://evolution.example/messages", provider._text_candidate_urls())
+
+    def test_custom_endpoint_placeholder_is_replaced_once(self):
+        provider = self._provider("v2", send_endpoint="/custom/{instance}/send")
+
+        urls = provider._text_candidate_urls()
+
+        self.assertEqual(urls[0], "https://evolution.example/custom/test-instance/send")
+        self.assertNotIn("https://evolution.example/custom/{instance}/send", urls)
+
+    def test_media_payload_mode_detects_url_payload(self):
+        provider = self._provider("v2")
+        payload = provider._media_payload_variants(
+            "923001234567",
+            "document",
+            media_value="https://files.example/document.pdf",
+            filename="document.pdf",
+        )[0]
+
+        self.assertEqual(provider._media_payload_mode(payload), "url")
+
+    def test_filename_from_url_ignores_query_string(self):
+        provider = self._provider("v2")
+
+        filename = provider._filename_from_url(
+            "https://files.example/private/My%20File.pdf?signature=abc",
+            "document",
+        )
+
+        self.assertEqual(filename, "My File.pdf")
+
+    @patch("whatsapp_evolution.whatsapp_evolution.providers.evolution.requests.post")
+    def test_successful_non_json_response_stops_retrying(self, mock_post):
+        provider = self._provider("v2")
+        response = MagicMock()
+        response.status_code = 200
+        response.text = "OK"
+        response.json.side_effect = ValueError("No JSON")
+        response.raise_for_status.return_value = None
+        mock_post.return_value = response
+
+        with patch.object(provider, "_acquire_dedup", return_value=True), patch.object(
+            provider, "_text_candidate_urls", return_value=["https://evolution.example/message/sendText/test-instance"]
+        ):
+            result = provider.send_message("923001234567", "Hello")
+
+        self.assertEqual(result["ok"], True)
+        self.assertEqual(result["status_code"], 200)
+        self.assertEqual(result["text"], "OK")
+        self.assertEqual(mock_post.call_count, 1)
+
+    def test_successful_json_response_is_returned_unchanged(self):
+        provider = self._provider("v2")
+        response = MagicMock()
+        response.json.return_value = {"id": "wamid.test"}
+
+        self.assertEqual(provider._success_result(response), {"id": "wamid.test"})
+
+    def test_fetch_instances_requires_matching_instance(self):
+        provider = self._provider("v2")
+        body = {
+            "data": [
+                {"instance": {"instanceName": "other-instance", "state": "open"}},
+                {"instance": {"instanceName": "test-instance", "state": "close"}},
+            ]
+        }
+
+        result = provider._connection_result_from_body(
+            body,
+            "https://evolution.example/instance/fetchInstances",
+            require_instance_match=True,
+        )
+
+        self.assertEqual(result["ok"], False)
+        self.assertEqual(result["status"], "disconnected")
+
+    def test_fetch_instances_reports_missing_configured_instance(self):
+        provider = self._provider("v2")
+        body = {"data": [{"instance": {"instanceName": "other-instance", "state": "open"}}]}
+
+        result = provider._connection_result_from_body(
+            body,
+            "https://evolution.example/instance/fetchInstances",
+            require_instance_match=True,
+        )
+
+        self.assertEqual(result["ok"], False)
+        self.assertEqual(result["status"], "disconnected")
+        self.assertIn("not found", result["message"])
 
 
 class TestRunServerScriptForDocEvent(IntegrationTestCase):
