@@ -6,7 +6,11 @@ from unittest.mock import patch, MagicMock
 
 import frappe
 from whatsapp_evolution.testing import IntegrationTestCase
-from whatsapp_evolution.whatsapp_evolution.providers.evolution import EvolutionProvider
+from whatsapp_evolution.whatsapp_evolution.providers.evolution import (
+    EvolutionProvider,
+    _map_evolution_status,
+    _normalize_event_type,
+)
 
 from whatsapp_evolution.utils import (
     format_number,
@@ -359,6 +363,34 @@ class TestEvolutionProviderV2(TestCase):
         self.assertEqual(result["ok"], False)
         self.assertEqual(result["status"], "disconnected")
         self.assertIn("not found", result["message"])
+
+    def test_normalizes_uppercase_evolution_event_names(self):
+        self.assertEqual(_normalize_event_type("MESSAGES_UPDATE"), "messages.update")
+        self.assertEqual(_normalize_event_type("MESSAGES_UPSERT"), "messages.upsert")
+
+    def test_parse_update_accepts_uppercase_event_and_ack_status(self):
+        provider = self._provider("v2")
+
+        parsed = provider.parse_incoming({
+            "event": "MESSAGES_UPDATE",
+            "data": {
+                "key": {
+                    "id": "3EB0C11694230BF9D6C89F",
+                    "remoteJid": "923001007823@s.whatsapp.net",
+                    "fromMe": True,
+                },
+                "update": {"ack": 3},
+            },
+        })
+
+        self.assertEqual(parsed["event"], "messages.update")
+        self.assertEqual(parsed["message_id"], "3EB0C11694230BF9D6C89F")
+        self.assertEqual(parsed["status"], 3)
+        self.assertEqual(_map_evolution_status(parsed["status"]), "Read")
+
+    def test_status_mapper_accepts_delivery_and_read_aliases(self):
+        self.assertEqual(_map_evolution_status("DELIVERY"), "Delivered")
+        self.assertEqual(_map_evolution_status("READ_RECEIPT"), "Read")
 
 
 class TestRunServerScriptForDocEvent(IntegrationTestCase):

@@ -449,7 +449,7 @@ class EvolutionProvider(BaseProvider):
         )
 
     def parse_incoming(self, data):
-        event = data.get("event")
+        event = _normalize_event_type(data.get("event"))
         payload = data.get("data") or {}
         if isinstance(payload, list):
             payload = payload[0] if payload else {}
@@ -497,11 +497,21 @@ class EvolutionProvider(BaseProvider):
                 else None
             )
             if status is None and isinstance(update, dict):
+                status = update.get("ack")
+            if status is None and isinstance(update, dict):
                 status = (update.get("message") or {}).get("status")
+            if status is None and isinstance(update, dict):
+                status = (update.get("message") or {}).get("ack")
             if status is None:
                 status = payload.get("status")
             if status is None:
+                status = payload.get("ack")
+            if status is None:
                 status = (payload.get("statusMessage") or {}).get("status")
+            if status is None:
+                status = (payload.get("message") or {}).get("status")
+            if status is None:
+                status = (payload.get("message") or {}).get("ack")
 
             return {
                 "event": event,
@@ -561,6 +571,20 @@ def _status_rank(status_text):
     return order.get(status_text or "", 0)
 
 
+def _normalize_event_type(event_type):
+    if event_type is None:
+        return ""
+
+    normalized = str(event_type).strip().lower().replace("_", ".").replace("-", ".")
+    aliases = {
+        "messages.upsert": "messages.upsert",
+        "message.upsert": "messages.upsert",
+        "messages.update": "messages.update",
+        "message.update": "messages.update",
+    }
+    return aliases.get(normalized, normalized)
+
+
 def _map_evolution_status(status_value):
     if status_value is None:
         return None
@@ -575,9 +599,9 @@ def _map_evolution_status(status_value):
             text = raw.upper()
             if text in {"PENDING", "SERVER_ACK", "SENT", "ACK", "1"}:
                 return "Sent"
-            if text in {"DELIVERY_ACK", "DELIVERED", "2"}:
+            if text in {"DELIVERY_ACK", "DELIVERED", "DELIVERY", "2"}:
                 return "Delivered"
-            if text in {"READ", "READ_ACK", "3"}:
+            if text in {"READ", "READ_ACK", "READ_RECEIPT", "3"}:
                 return "Read"
             if text in {"PLAYED", "4"}:
                 return "Played"
@@ -707,7 +731,7 @@ def handle_webhook():
     if not data:
         return "No payload"
     
-    event_type = data.get("event")
+    event_type = _normalize_event_type(data.get("event"))
     if not event_type:
         return "No event"
 
