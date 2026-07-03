@@ -18,9 +18,14 @@ def _get_primary_change(data):
 @frappe.whitelist(allow_guest=True)
 def webhook():
 	"""Meta webhook."""
-	if frappe.request.method == "GET":
-		return get()
-	return post()
+	try:
+		if frappe.request.method == "GET":
+			return get()
+		return post()
+	except Exception:
+		frappe.log_error(frappe.get_traceback(), "WhatsApp Meta Webhook Failed")
+		frappe.local.response.http_status_code = 500
+		return "Webhook processing failed"
 
 
 def get():
@@ -48,6 +53,8 @@ def get():
 def post():
 	"""Post."""
 	data = frappe.local.form_dict
+	# Webhooks run as Guest; the provider token/account match is the trust
+	# boundary, so app-owned audit rows need an explicit permission bypass.
 	frappe.get_doc({
 		"doctype": "WhatsApp Notification Log",
 		"template": "Webhook",
@@ -186,7 +193,8 @@ def post():
 						).save(ignore_permissions=True)
 
 						message_doc.attach = file.file_url
-						message_doc.save()
+						# Guest webhook owns this just-created incoming message row.
+						message_doc.save(ignore_permissions=True)
 			elif message_type == "button":
 				frappe.get_doc({
 					"doctype": "WhatsApp Message",
@@ -249,7 +257,12 @@ def update_message_status(data):
 		return
 
 	doc = frappe.get_doc("WhatsApp Message", name)
-	doc.status = status
+	doc.status = {
+		"sent": "Sent",
+		"delivered": "Delivered",
+		"read": "Read",
+		"failed": "Failed",
+	}.get(str(status).lower(), status)
 	if conversation:
 		doc.conversation_id = conversation
 	doc.save(ignore_permissions=True)

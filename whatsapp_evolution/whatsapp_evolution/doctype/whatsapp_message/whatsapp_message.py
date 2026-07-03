@@ -260,6 +260,26 @@ def _resolve_outgoing_account_name(preferred_account=None):
     return fallback.name if fallback else None
 
 
+def _get_reference_doc_for_read(reference_doctype, reference_name):
+    if not reference_doctype or not reference_name:
+        return None
+    if not frappe.db.exists("DocType", reference_doctype):
+        frappe.throw(_("Invalid Reference DocType: {0}").format(reference_doctype))
+    if not frappe.db.exists(reference_doctype, reference_name):
+        frappe.throw(_("Reference document not found: {0}").format(reference_name))
+
+    ref_doc = frappe.get_doc(reference_doctype, reference_name)
+    ref_doc.check_permission("read")
+    return ref_doc
+
+
+def _check_template_read_permission(template):
+    if not template:
+        return
+    template_doc = frappe.get_doc("WhatsApp Templates", template)
+    template_doc.check_permission("read")
+
+
 def _resolve_evolution_account(preferred_account=None, template_account=None):
     candidates = []
     for candidate in (preferred_account, template_account):
@@ -567,6 +587,9 @@ def _create_queue_placeholder(
             "message_id": f"queue-{frappe.generate_hash(length=8)}",
         }
     )
+    # Queue placeholders are created by trusted whitelisted methods after their
+    # reference/template permission checks have passed; background workers need
+    # the placeholder even when the caller cannot create WhatsApp Message rows.
     doc.insert(ignore_permissions=True)
     return doc.name
 
@@ -1121,6 +1144,8 @@ def send_template(
     no_letterhead=0,
     whatsapp_account=None,
 ):
+    _check_template_read_permission(template)
+    _get_reference_doc_for_read(reference_doctype, reference_name)
     template_account = frappe.db.get_value("WhatsApp Templates", template, "whatsapp_account") if template else None
     selected_account = _resolve_evolution_account(
         preferred_account=whatsapp_account,
@@ -1231,6 +1256,8 @@ def send_template_now(
                 "attach": send_attach or "",
                 "whatsapp_account": selected_account or "",
             })
+            # Background send workers update the app-owned queue document; the
+            # original Desk caller was already authorized before enqueue.
             doc.insert(ignore_permissions=True)
             sent_doc = doc
         else:
@@ -1262,7 +1289,11 @@ def send_template_now(
         frappe.db.commit()
         if queued_message_name:
             frappe.log_error(frappe.get_traceback(), "WhatsApp Template Send Failed")
-            return {"queued": False, "status": "Failed", "error": str(e)}
+            return {
+                "queued": False,
+                "status": "Failed",
+                "error": _("WhatsApp template send failed. Check Error Log for details."),
+            }
         raise
 
 
@@ -1279,6 +1310,7 @@ def send_custom(
     no_letterhead=0,
     whatsapp_account=None,
 ):
+    _get_reference_doc_for_read(reference_doctype, reference_name)
     selected_account = _resolve_evolution_account(preferred_account=whatsapp_account)
     queue_name = _create_queue_placeholder(
         to=to,
@@ -1369,6 +1401,8 @@ def send_custom_now(
                 "attach": attach or "",
                 "whatsapp_account": selected_account or "",
             })
+            # Background send workers update the app-owned queue document; the
+            # original Desk caller was already authorized before enqueue.
             doc.insert(ignore_permissions=True)
             sent_doc = doc
         else:
@@ -1400,12 +1434,18 @@ def send_custom_now(
         frappe.db.commit()
         if queued_message_name:
             frappe.log_error(frappe.get_traceback(), "WhatsApp Custom Send Failed")
-            return {"queued": False, "status": "Failed", "error": str(e)}
+            return {
+                "queued": False,
+                "status": "Failed",
+                "error": _("WhatsApp custom send failed. Check Error Log for details."),
+            }
         raise
 
 
 @frappe.whitelist()
 def get_template_preview(template, reference_doctype=None, reference_name=None, body_param=None):
+    _check_template_read_permission(template)
+    ref_doc = _get_reference_doc_for_read(reference_doctype, reference_name)
     template_doc = frappe.get_doc("WhatsApp Templates", template)
     template_text = _get_template_text(template_doc)
     params = []
@@ -1415,10 +1455,8 @@ def get_template_preview(template, reference_doctype=None, reference_name=None, 
         params = manual_params
     elif reference_doctype and reference_name and template_doc.sample_values:
         field_names = template_doc.field_names.split(",") if template_doc.field_names else template_doc.sample_values.split(",")
-        ref_doc = frappe.get_doc(reference_doctype, reference_name)
         params = [_resolve_template_value(ref_doc, field) for field in field_names if field and field.strip()]
-    elif reference_doctype and reference_name:
-        ref_doc = frappe.get_doc(reference_doctype, reference_name)
+    elif ref_doc:
         placeholder_matches = re.findall(r"{{\s*(\d+)\s*}}", template_text)
         fallback_values = [
             ref_doc.get("customer_name") or ref_doc.get("contact_display") or "",
@@ -1429,8 +1467,7 @@ def get_template_preview(template, reference_doctype=None, reference_name=None, 
             params.append(str(value or ""))
 
     rendered_text = _render_template_text(template_text, params)
-    if reference_doctype and reference_name:
-        ref_doc = frappe.get_doc(reference_doctype, reference_name)
+    if ref_doc:
         rendered_text = _render_named_placeholders(rendered_text, ref_doc)
 
     return {
@@ -1446,6 +1483,10 @@ def get_linked_contacts_query(doctype, txt, searchfield, start, page_len, filter
     reference_doctype = (filters or {}).get("reference_doctype")
     reference_name = (filters or {}).get("reference_name")
     if not reference_doctype or not reference_name:
+        return []
+    try:
+        _get_reference_doc_for_read(reference_doctype, reference_name)
+    except Exception:
         return []
 
     links, _ = _collect_reference_links(reference_doctype, reference_name)
@@ -1505,6 +1546,7 @@ def get_authorized_whatsapp_numbers(reference_doctype, reference_name, primary_o
         _get_contact_numbers,
     )
     primary_only = frappe.utils.cint(primary_only)
+    _get_reference_doc_for_read(reference_doctype, reference_name)
     
     # 1. Direct Dynamic Links (strict)
     numbers = _get_dynamic_link_contact_numbers(
@@ -1581,6 +1623,7 @@ def get_default_contact_and_whatsapp_number(reference_doctype, reference_name):
         _get_contact_numbers,
     )
 
+    _get_reference_doc_for_read(reference_doctype, reference_name)
     links, direct_contacts = _collect_reference_links(reference_doctype, reference_name)
 
     for contact_name in direct_contacts:

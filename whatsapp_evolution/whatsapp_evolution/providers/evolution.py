@@ -512,6 +512,8 @@ class EvolutionProvider(BaseProvider):
                 status = (payload.get("message") or {}).get("status")
             if status is None:
                 status = (payload.get("message") or {}).get("ack")
+            if isinstance(status, dict):
+                status = status.get("status") or status.get("ack") or status.get("value")
 
             return {
                 "event": event,
@@ -727,101 +729,107 @@ def _account_name_from_instance(instance_name):
 
 @frappe.whitelist(allow_guest=True)
 def handle_webhook():
-    data = frappe.local.request.get_json(silent=True) or {}
-    if not data:
-        return "No payload"
-    
-    event_type = _normalize_event_type(data.get("event"))
-    if not event_type:
-        return "No event"
+    try:
+        request = frappe.local.request
+        data = request.get_json(silent=True) or frappe._dict(frappe.form_dict)
+        if not data:
+            return "No payload"
 
-    provider = EvolutionProvider(frappe.get_single("WhatsApp Settings").as_dict())
-    msg = provider.parse_incoming(data)
-    payload_data = _normalize_webhook_data(data)
-    instance_name = _extract_instance_name(data, payload_data)
-    account_name = _account_name_from_instance(instance_name)
-    
-    if event_type == "messages.upsert":
-        if msg.get("is_from_me"):
-            # Update outgoing message status if we find it by ID
-            if msg.get("message_id"):
-                found = _find_message_name_by_id(msg.get("message_id"))
-                if found and _status_rank("Sent") >= _status_rank(found.get("status")):
-                    frappe.db.set_value("WhatsApp Message", found.get("name"), "status", "Sent")
-            return "OK"
-            
-        from whatsapp_evolution.incoming import handle_incoming_message
-        handle_incoming_message(msg, whatsapp_account=account_name)
-        
-    elif event_type == "messages.update":
-        status_code = msg.get("status")
-        message_id = msg.get("message_id")
-        key_data = payload_data.get("key") if isinstance(payload_data, dict) else {}
-        remote_jid = (key_data or {}).get("remoteJid")
-        from_me = (key_data or {}).get("fromMe")
-        if not remote_jid:
-            remote_jid = msg.get("to")
-            if remote_jid and "@" not in remote_jid:
-                remote_jid = f"{remote_jid}@s.whatsapp.net"
-        status_text = _map_evolution_status(status_code)
+        event_type = _normalize_event_type(data.get("event"))
+        if not event_type:
+            return "No event"
 
-        _log_webhook_debug(
-            {
-                "event": "messages.update.received",
-                "message_id": message_id,
-                "status_raw": status_code,
-                "status_mapped": status_text,
-                "remote_jid": remote_jid,
-                "from_me": from_me,
-            }
-        )
+        provider = EvolutionProvider(frappe.get_single("WhatsApp Settings").as_dict())
+        msg = provider.parse_incoming(data)
+        payload_data = _normalize_webhook_data(data)
+        instance_name = _extract_instance_name(data, payload_data)
+        account_name = _account_name_from_instance(instance_name)
 
-        if status_code is not None:
-            if status_text:
-                found_by_id = _find_message_name_by_id(message_id) if message_id else None
-                found = found_by_id
-                if not found and remote_jid:
-                    found = _find_recent_outgoing_by_number(remote_jid, account_name=account_name)
-                if found and _status_rank(status_text) >= _status_rank(found.get("status")):
-                    frappe.db.set_value("WhatsApp Message", found.get("name"), "status", status_text)
-                    _log_webhook_debug(
-                        {
-                            "event": "messages.update.applied",
-                            "message_id": message_id,
-                            "docname": found.get("name"),
-                            "previous_status": found.get("status"),
-                            "new_status": status_text,
-                            "fallback_by_number": bool(not found_by_id and remote_jid),
-                        }
-                    )
+        if event_type == "messages.upsert":
+            if msg.get("is_from_me"):
+                # Update outgoing message status if we find it by ID
+                if msg.get("message_id"):
+                    found = _find_message_name_by_id(msg.get("message_id"))
+                    if found and _status_rank("Sent") >= _status_rank(found.get("status")):
+                        frappe.db.set_value("WhatsApp Message", found.get("name"), "status", "Sent")
+                return "OK"
+
+            from whatsapp_evolution.incoming import handle_incoming_message
+            handle_incoming_message(msg, whatsapp_account=account_name)
+
+        elif event_type == "messages.update":
+            status_code = msg.get("status")
+            message_id = msg.get("message_id")
+            key_data = payload_data.get("key") if isinstance(payload_data, dict) else {}
+            remote_jid = (key_data or {}).get("remoteJid")
+            from_me = (key_data or {}).get("fromMe")
+            if not remote_jid:
+                remote_jid = msg.get("to")
+                if remote_jid and "@" not in remote_jid:
+                    remote_jid = f"{remote_jid}@s.whatsapp.net"
+            status_text = _map_evolution_status(status_code)
+
+            _log_webhook_debug(
+                {
+                    "event": "messages.update.received",
+                    "message_id": message_id,
+                    "status_raw": status_code,
+                    "status_mapped": status_text,
+                    "remote_jid": remote_jid,
+                    "from_me": from_me,
+                }
+            )
+
+            if status_code is not None:
+                if status_text:
+                    found_by_id = _find_message_name_by_id(message_id) if message_id else None
+                    found = found_by_id
+                    if not found and remote_jid:
+                        found = _find_recent_outgoing_by_number(remote_jid, account_name=account_name)
+                    if found and _status_rank(status_text) >= _status_rank(found.get("status")):
+                        frappe.db.set_value("WhatsApp Message", found.get("name"), "status", status_text)
+                        _log_webhook_debug(
+                            {
+                                "event": "messages.update.applied",
+                                "message_id": message_id,
+                                "docname": found.get("name"),
+                                "previous_status": found.get("status"),
+                                "new_status": status_text,
+                                "fallback_by_number": bool(not found_by_id and remote_jid),
+                            }
+                        )
+                    else:
+                        _log_webhook_debug(
+                            {
+                                "event": "messages.update.skipped",
+                                "reason": "no_match_or_lower_rank",
+                                "message_id": message_id,
+                                "status_mapped": status_text,
+                                "matched_doc": found.get("name") if found else None,
+                                "current_status": found.get("status") if found else None,
+                            }
+                        )
                 else:
                     _log_webhook_debug(
                         {
                             "event": "messages.update.skipped",
-                            "reason": "no_match_or_lower_rank",
+                            "reason": "unmapped_status",
                             "message_id": message_id,
-                            "status_mapped": status_text,
-                            "matched_doc": found.get("name") if found else None,
-                            "current_status": found.get("status") if found else None,
+                            "status_raw": status_code,
                         }
                     )
             else:
                 _log_webhook_debug(
                     {
                         "event": "messages.update.skipped",
-                        "reason": "unmapped_status",
+                        "reason": "missing_message_id_or_status",
                         "message_id": message_id,
                         "status_raw": status_code,
                     }
                 )
-        else:
-            _log_webhook_debug(
-                {
-                    "event": "messages.update.skipped",
-                    "reason": "missing_message_id_or_status",
-                    "message_id": message_id,
-                    "status_raw": status_code,
-                }
-            )
 
-    return "OK"
+        return "OK"
+    except Exception:
+        frappe.log_error(frappe.get_traceback(), "Evolution Webhook Failed")
+        frappe.local.response.http_status_code = 500
+        return "Webhook processing failed"
