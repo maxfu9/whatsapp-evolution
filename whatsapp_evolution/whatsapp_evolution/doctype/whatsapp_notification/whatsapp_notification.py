@@ -1057,9 +1057,13 @@ class WhatsAppNotification(Document):
                 )
 
             msg_doc.update(new_doc)
-            # The same trusted worker fills the app-owned attempt with its
-            # rendered content; normal business-document permissions stay intact.
-            msg_doc.save(ignore_permissions=True)
+            # Message is set_only_once for user edits. This trusted worker fills
+            # only rendered fields on the attempt it just created, without a
+            # second save or weakening the DocType's immutable-field protection.
+            frappe.db.set_value("WhatsApp Message", msg_doc.name, {
+                field: new_doc.get(field)
+                for field in ("message", "content_type", "use_template", "template_parameters", "attach")
+            })
             if media_url or media_bytes:
                 response = provider.send_media(
                     to_number=to_number,

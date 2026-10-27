@@ -289,6 +289,13 @@ class TestNotificationDelivery(TestCase):
             doc.name = f"attempt-{len(self.documents)}"
             doc.values = value
             doc.update.side_effect = doc.values.update
+            original_message = value.get("message")
+
+            def save(**kwargs):
+                if doc.save.call_count > 1 and doc.values.get("message") != original_message:
+                    raise frappe.ValidationError("Value cannot be changed for Message")
+
+            doc.save.side_effect = save
             self.documents.append(doc)
             return doc
 
@@ -314,7 +321,7 @@ class TestNotificationDelivery(TestCase):
         self.assertEqual(attempt.values["message"], "Hello Customer")
         self.assertEqual(attempt.values["reference_name"], "INV-TEST")
         self.assertTrue(attempt.flags.skip_send)
-        self.assertEqual(attempt.save.call_count, 2)
+        self.assertEqual(attempt.save.call_count, 1)
         attempt.save.assert_called_with(ignore_permissions=True)
         values = self.db.set_value.call_args.args[2]
         self.assertEqual(values["status"], "Failed")
@@ -339,6 +346,17 @@ class TestNotificationDelivery(TestCase):
         self.notify()
         self.assertEqual(self.db.set_value.call_args.args[2]["message_id"], "sent-1")
         self.assertEqual(self.db.set_value.call_args.args[2]["status"], "Success")
+
+    def test_rendered_content_is_persisted_without_resaving_immutable_message(self):
+        self.provider.send_message.return_value = {"key": {"id": "sent-1"}}
+        self.notify()
+        self.documents[0].save.assert_called_once_with(ignore_permissions=True)
+        rendered = self.db.set_value.call_args_list[0].args[2]
+        self.assertEqual(rendered["message"], "Hello Customer")
+        self.assertEqual(rendered["content_type"], "text")
+        self.assertNotIn("to", rendered)
+        self.assertNotIn("whatsapp_account", rendered)
+        self.provider.send_message.assert_called_once_with("923001234567", "Hello Customer")
 
     def test_configuration_failure_is_visible_before_provider_call(self):
         with patch.object(notifications, "_is_evolution_enabled", side_effect=frappe.ValidationError("Missing settings")):
