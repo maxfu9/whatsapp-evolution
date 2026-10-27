@@ -21,6 +21,7 @@ from whatsapp_evolution.utils import (
     is_evolution_enabled,
 )
 from whatsapp_evolution.whatsapp_evolution.providers import EvolutionProvider
+from whatsapp_evolution.utils.delivery import send_status
 
 
 LEDGER_BALANCE_ALIASES = {"ledger_balance", "_ledger_balance", "ledger balance"}
@@ -500,29 +501,13 @@ def _was_recently_sent(reference_doctype, reference_name, to_number, template_na
           and `to`=%s
           and ifnull(template, '')=%s
           and creation >= (now() - interval %s second)
-          and ifnull(status, '') in ('Queued', 'Started', 'Success')
+          and ifnull(status, '') in ('Success', 'Sent', 'Delivered', 'Read', 'Needs Review')
         limit 1
         """,
         (reference_doctype, reference_name, to_number, template_name or "", seconds),
         as_dict=True,
     )
     return bool(rows)
-
-
-def _notification_dedup_key(notification_name, reference_doctype, reference_name, to_number, template_name):
-    return (
-        f"wa_notif_dedup:{notification_name}:{reference_doctype}:{reference_name}:"
-        f"{to_number}:{template_name}"
-    )
-
-
-def _acquire_notification_dedup(notification_name, reference_doctype, reference_name, to_number, template_name, ttl=180):
-    key = _notification_dedup_key(notification_name, reference_doctype, reference_name, to_number, template_name)
-    cache = frappe.cache()
-    if cache.get_value(key):
-        return False
-    cache.set_value(key, 1, expires_in_sec=ttl)
-    return True
 
 
 class WhatsAppNotification(Document):
@@ -697,23 +682,8 @@ class WhatsAppNotification(Document):
                 )
                 try:
                     with filelock(lock_key, timeout=10):
-                        if not _acquire_notification_dedup(
-                            notification_name=self.name,
-                            reference_doctype=doc_data.get("doctype"),
-                            reference_name=doc_data.get("name"),
-                            to_number=formatted_to,
-                            template_name=template.name,
-                            ttl=180,
-                        ):
-                            _insert_notification_log(
-                                self.template,
-                                error=(
-                                    f"Skipped duplicate notification for {formatted_to} on "
-                                    f"{doc_data.get('doctype')} {doc_data.get('name')}"
-                                ),
-                            )
-                            continue
-
+                        # In-flight deduplication belongs to the provider's
+                        # atomic reservation, which is released on rejection.
                         if _was_recently_sent(
                             reference_doctype=doc_data.get("doctype"),
                             reference_name=doc_data.get("name"),
@@ -983,8 +953,35 @@ class WhatsAppNotification(Document):
         default_account = get_whatsapp_account(account_type="outgoing")
         default_account_name = default_account.name if default_account else None
         effective_account = template_account or default_account_name
+        attempted_messages = []
 
         def _send_with_account(account_name):
+            msg_doc = frappe.get_doc({
+                "doctype": "WhatsApp Message",
+                "type": "Outgoing",
+                "status": "Started",
+                "to": data.get("to"),
+                "whatsapp_account": account_name or "",
+                "message_type": "Manual",
+                "content_type": "text",
+                "template": self.template,
+                "reference_doctype": _doc_value(doc_data, "doctype") if doc_data else None,
+                "reference_name": _doc_value(doc_data, "name") if doc_data else None,
+            })
+            msg_doc.flags.skip_send = True
+            # Configured notification workers need an app-owned delivery record
+            # even when the triggering user cannot create WhatsApp Messages.
+            msg_doc.save(ignore_permissions=True)
+            attempted_messages.append(msg_doc.name)
+            try:
+                return _prepare_and_send(account_name, msg_doc)
+            except Exception as exc:
+                frappe.db.set_value("WhatsApp Message", msg_doc.name, {
+                    "status": send_status(error=exc), "last_error": str(exc),
+                })
+                raise
+
+        def _prepare_and_send(account_name, msg_doc):
             if not _is_evolution_enabled(account_name):
                 frappe.throw(
                     _("Evolution API is required. Configure Evolution on WhatsApp Account / WhatsApp Settings.")
@@ -1035,20 +1032,7 @@ class WhatsAppNotification(Document):
                     media_bytes = None
                     media_name = media_name or None
 
-            if media_url or media_bytes:
-                response = provider.send_media(
-                    to_number=to_number,
-                    media_url=media_url,
-                    media_type=media_type,
-                    caption=rendered_text,
-                    media_bytes=media_bytes,
-                    filename=media_name,
-                )
-                content_type = media_type
-            else:
-                response = provider.send_message(to_number, rendered_text)
-                content_type = "text"
-
+            content_type = media_type if (media_url or media_bytes) else "text"
             params_json = frappe.json.dumps(params, default=str) if params else None
             new_doc = {
                 "doctype": "WhatsApp Message",
@@ -1057,7 +1041,7 @@ class WhatsAppNotification(Document):
                 "to": data.get("to"),
                 "whatsapp_account": account_name or "",
                 "message_type": "Manual",
-                "message_id": _extract_response_message_id(response) or f"evo-log-{frappe.generate_hash(length=8)}",
+                "status": "Started",
                 "content_type": content_type,
                 "use_template": 1,
                 "template": self.template,
@@ -1072,9 +1056,27 @@ class WhatsAppNotification(Document):
                     }
                 )
 
-            msg_doc = frappe.get_doc(new_doc)
-            msg_doc.flags.skip_send = True
+            msg_doc.update(new_doc)
+            # The same trusted worker fills the app-owned attempt with its
+            # rendered content; normal business-document permissions stay intact.
             msg_doc.save(ignore_permissions=True)
+            if media_url or media_bytes:
+                response = provider.send_media(
+                    to_number=to_number,
+                    media_url=media_url,
+                    media_type=media_type,
+                    caption=rendered_text,
+                    media_bytes=media_bytes,
+                    filename=media_name,
+                )
+            else:
+                response = provider.send_message(to_number, rendered_text)
+            status = send_status(response)
+            frappe.db.set_value("WhatsApp Message", msg_doc.name, {
+                "status": status,
+                "message_id": "" if status == "Skipped" else _extract_response_message_id(response),
+                "last_error": response.get("reason", "") if status == "Skipped" else "",
+            })
             return response
 
         success = False
@@ -1082,7 +1084,7 @@ class WhatsAppNotification(Document):
         response = {}
         try:
             response = _send_with_account(effective_account)
-            if doc_data and self.set_property_after_alert and self.property_value:
+            if send_status(response) == "Success" and doc_data and self.set_property_after_alert and self.property_value:
                 if _doc_value(doc_data, "doctype") and _doc_value(doc_data, "name"):
                     fieldname = self.set_property_after_alert
                     value = self.property_value
@@ -1098,6 +1100,7 @@ class WhatsAppNotification(Document):
             if (
                 default_account_name
                 and effective_account != default_account_name
+                and not getattr(e, "delivery_unknown", False)
                 and _should_retry_on_default_account(error_message)
             ):
                 try:
@@ -1108,6 +1111,9 @@ class WhatsAppNotification(Document):
                     error_message = str(e2)
         finally:
             meta = {"error": error_message} if not success else {"response": response}
+            meta["messages"] = attempted_messages
+            # Notification execution is authorized by its configured trigger;
+            # retain its audit log independently of the triggering user's roles.
             frappe.get_doc(
                 {
                     "doctype": "WhatsApp Notification Log",

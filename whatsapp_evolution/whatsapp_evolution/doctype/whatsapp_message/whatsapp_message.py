@@ -19,6 +19,7 @@ from whatsapp_evolution.utils import (
     is_evolution_enabled,
 )
 from whatsapp_evolution.whatsapp_evolution.providers import EvolutionProvider
+from whatsapp_evolution.utils.delivery import send_status, send_job_id, start_queued_message
 
 
 LEDGER_BALANCE_ALIASES = {"ledger_balance", "_ledger_balance", "ledger balance"}
@@ -536,29 +537,6 @@ def _extract_print_format_from_attach(attach):
         return None
 
 
-def _outgoing_dedup_key(doc):
-    return "|".join(
-        [
-            str(doc.get("to") or ""),
-            str(doc.get("content_type") or ""),
-            str(doc.get("message") or ""),
-            _normalized_attachment_identity(doc.get("attach")),
-            str(doc.get("template") or ""),
-            str(doc.get("reference_doctype") or ""),
-            str(doc.get("reference_name") or ""),
-        ]
-    )
-
-
-def _acquire_outgoing_dedup(doc, ttl=60):
-    key = f"wa_msg_dedup:{_outgoing_dedup_key(doc)}"
-    cache = frappe.cache()
-    if cache.get_value(key):
-        return False
-    cache.set_value(key, 1, expires_in_sec=ttl)
-    return True
-
-
 def _create_queue_placeholder(
     to,
     reference_doctype,
@@ -597,11 +575,9 @@ def _create_queue_placeholder(
 def _update_queue_status(name, status, message_id=None, details=None):
     if not name or not frappe.db.exists("WhatsApp Message", name):
         return
-    values = {"status": status}
-    if message_id:
+    values = {"status": status, "last_error": details or ""}
+    if message_id is not None:
         values["message_id"] = message_id
-    if details:
-        values["message"] = details
     frappe.db.set_value("WhatsApp Message", name, values, update_modified=True)
 
 
@@ -629,7 +605,7 @@ def _recent_duplicate_exists(
           and ifnull(message,'')=%s
           and ifnull(attach,'')=%s
           and ifnull(template,'')=%s
-          and ifnull(status,'') in ('Queued', 'Started', 'Success')
+          and ifnull(status,'') in ('Success', 'Sent', 'Delivered', 'Read', 'Needs Review')
           and creation >= (now() - interval %s second)
           and (%s is null or name != %s)
         limit 1
@@ -776,12 +752,6 @@ class WhatsAppMessage(Document):
 
         self.set_whatsapp_account()
         if self.type == "Outgoing" and self.message_type != "Template" and not self.message_id:
-            if not _acquire_outgoing_dedup(self, ttl=60):
-                self.status = "Skipped"
-                self.message_id = "dedup-skip"
-                self.create_whatsapp_profile()
-                return
-
             if self.attach and not self.attach.startswith("http"):
                 link = frappe.utils.get_url() + "/" + self.attach
             else:
@@ -849,10 +819,10 @@ class WhatsAppMessage(Document):
 
             try:
                 self.notify(data)
-                self.status = "Success"
             except Exception as e:
-                self.status = "Failed"
-                frappe.throw(f"Failed to send message {str(e)}")
+                self.status = send_status(error=e)
+                self.last_error = str(e)
+                raise
         elif self.type == "Outgoing" and self.message_type == "Template" and not self.message_id:
             self.send_template()
 
@@ -1091,8 +1061,9 @@ class WhatsAppMessage(Document):
                     filename=media_filename,
                 )
             except Exception as e:
-                is_dns_resolution_error = "enotfound" in str(e).lower()
-                if not self._allow_attachment_link_fallback() and not is_dns_resolution_error:
+                if not getattr(e, "allow_link_fallback", False):
+                    raise
+                if not self._allow_attachment_link_fallback():
                     frappe.throw(
                         _("Attachment send failed in File Only mode: {0}").format(str(e))
                     )
@@ -1105,6 +1076,10 @@ class WhatsAppMessage(Document):
         else:
             response = provider.send_message(to_number, self.message or "")
         self.message_id = _extract_response_message_id(response)
+        self.status = send_status(response)
+        self.last_error = response.get("reason", "") if self.status == "Skipped" else ""
+        if self.status == "Skipped":
+            self.message_id = ""
         return
 
     def format_number(self, number):
@@ -1178,6 +1153,7 @@ def send_template(
     frappe.enqueue(
         "whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_message.whatsapp_message.send_template_now",
         queue="short",
+        job_id=send_job_id(queue_name),
         enqueue_after_commit=True,
         **kwargs,
     )
@@ -1197,7 +1173,8 @@ def send_template_now(
     whatsapp_account=None,
     queued_message_name=None,
 ):
-    _update_queue_status(queued_message_name, "Started")
+    if not start_queued_message(queued_message_name):
+        return
     try:
         sent_doc = None
         template_account = frappe.db.get_value("WhatsApp Templates", template, "whatsapp_account") if template else None
@@ -1239,7 +1216,7 @@ def send_template_now(
             template=template,
             exclude_name=queued_message_name,
         ):
-            _update_queue_status(queued_message_name, "Skipped", details="Duplicate prevented")
+            _update_queue_status(queued_message_name, "Skipped", message_id="", details="Duplicate prevented")
             return
 
         if not queued_message_name:
@@ -1280,18 +1257,18 @@ def send_template_now(
         
         _update_queue_status(
             queued_message_name,
-            "Success",
+            sent_doc.status or "Success",
             message_id=getattr(sent_doc, "message_id", None),
-            details=getattr(sent_doc, "message", None),
+            details=getattr(sent_doc, "last_error", None),
         )
     except Exception as e:
-        _update_queue_status(queued_message_name, "Failed", details=str(e))
+        _update_queue_status(queued_message_name, send_status(error=e), details=str(e))
         frappe.db.commit()
         if queued_message_name:
             frappe.log_error(frappe.get_traceback(), "WhatsApp Template Send Failed")
             return {
                 "queued": False,
-                "status": "Failed",
+                "status": send_status(error=e),
                 "error": _("WhatsApp template send failed. Check Error Log for details."),
             }
         raise
@@ -1338,6 +1315,7 @@ def send_custom(
     frappe.enqueue(
         "whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_message.whatsapp_message.send_custom_now",
         queue="short",
+        job_id=send_job_id(queue_name),
         enqueue_after_commit=True,
         **kwargs,
     )
@@ -1357,7 +1335,8 @@ def send_custom_now(
     whatsapp_account=None,
     queued_message_name=None,
 ):
-    _update_queue_status(queued_message_name, "Started")
+    if not start_queued_message(queued_message_name):
+        return
     try:
         actual_content_type = content_type or "text"
         if reference_doctype and reference_name and (message or "").strip():
@@ -1382,7 +1361,7 @@ def send_custom_now(
             template=None,
             exclude_name=queued_message_name,
         ):
-            _update_queue_status(queued_message_name, "Skipped", details="Duplicate prevented")
+            _update_queue_status(queued_message_name, "Skipped", message_id="", details="Duplicate prevented")
             return
 
         selected_account = _resolve_evolution_account(preferred_account=whatsapp_account)
@@ -1425,18 +1404,18 @@ def send_custom_now(
 
         _update_queue_status(
             queued_message_name,
-            "Success",
+            sent_doc.status or "Success",
             message_id=getattr(sent_doc, "message_id", None),
-            details=getattr(sent_doc, "message", None),
+            details=getattr(sent_doc, "last_error", None),
         )
     except Exception as e:
-        _update_queue_status(queued_message_name, "Failed", details=str(e))
+        _update_queue_status(queued_message_name, send_status(error=e), details=str(e))
         frappe.db.commit()
         if queued_message_name:
             frappe.log_error(frappe.get_traceback(), "WhatsApp Custom Send Failed")
             return {
                 "queued": False,
-                "status": "Failed",
+                "status": send_status(error=e),
                 "error": _("WhatsApp custom send failed. Check Error Log for details."),
             }
         raise

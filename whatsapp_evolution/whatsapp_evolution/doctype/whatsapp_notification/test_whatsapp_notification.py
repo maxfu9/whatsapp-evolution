@@ -168,9 +168,8 @@ class TestWhatsAppNotification(IntegrationTestCase):
         self.assertFalse(cached)
 
     @patch("whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_notification.whatsapp_notification._was_recently_sent", return_value=False)
-    @patch("whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_notification.whatsapp_notification._acquire_notification_dedup", return_value=True)
     @patch("whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_notification.whatsapp_notification.EvolutionProvider.send_message")
-    def test_send_template_message(self, mock_send, _mock_dedup, _mock_recent):
+    def test_send_template_message(self, mock_send, _mock_recent):
         """Test send_template_message sends correct data."""
         mock_send.return_value = {"id": "wamid.notif_test_1"}
 
@@ -191,9 +190,8 @@ class TestWhatsAppNotification(IntegrationTestCase):
         self.assertIn("Hello", mock_send.call_args.args[1])
 
     @patch("whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_notification.whatsapp_notification._was_recently_sent", return_value=False)
-    @patch("whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_notification.whatsapp_notification._acquire_notification_dedup", return_value=True)
     @patch("whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_notification.whatsapp_notification.EvolutionProvider.send_message")
-    def test_send_template_message_without_field_name_uses_auto_resolution(self, mock_send, _mock_dedup, _mock_recent):
+    def test_send_template_message_without_field_name_uses_auto_resolution(self, mock_send, _mock_recent):
         """Test auto-recipient resolution when field_name is left blank."""
         mock_send.return_value = {"id": "wamid.notif_auto_1"}
 
@@ -211,9 +209,8 @@ class TestWhatsAppNotification(IntegrationTestCase):
         self.assertEqual(mock_send.call_args.args[0], "919900112234")
 
     @patch("whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_notification.whatsapp_notification._was_recently_sent", return_value=False)
-    @patch("whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_notification.whatsapp_notification._acquire_notification_dedup", return_value=True)
     @patch("whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_notification.whatsapp_notification.EvolutionProvider.send_message")
-    def test_send_template_message_with_condition(self, mock_send, _mock_dedup, _mock_recent):
+    def test_send_template_message_with_condition(self, mock_send, _mock_recent):
         """Test that condition evaluation works."""
         mock_send.return_value = {"id": "wamid.notif_cond_1"}
 
@@ -274,9 +271,8 @@ class TestWhatsAppNotification(IntegrationTestCase):
 
     @patch("whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_notification.whatsapp_notification.sleep")
     @patch("whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_notification.whatsapp_notification._was_recently_sent", return_value=False)
-    @patch("whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_notification.whatsapp_notification._acquire_notification_dedup", return_value=True)
     @patch("whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_notification.whatsapp_notification.EvolutionProvider.send_message")
-    def test_send_template_message_job(self, mock_send, _mock_dedup, _mock_recent, mock_sleep):
+    def test_send_template_message_job(self, mock_send, _mock_recent, mock_sleep):
         """Test background delayed worker sends notification."""
         mock_send.return_value = {"id": "wamid.notif_delay_1"}
 

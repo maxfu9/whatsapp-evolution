@@ -4,8 +4,16 @@ import base64
 import hashlib
 import json
 import mimetypes
+from uuid import uuid4
 from urllib.parse import urlparse, unquote
 from .base import BaseProvider
+
+
+class EvolutionSendError(frappe.ValidationError):
+    def __init__(self, message, *, delivery_unknown=False, allow_link_fallback=False):
+        super().__init__(message)
+        self.delivery_unknown = delivery_unknown
+        self.allow_link_fallback = allow_link_fallback
 
 
 class EvolutionProvider(BaseProvider):
@@ -43,17 +51,92 @@ class EvolutionProvider(BaseProvider):
             }
 
     def _dedup_key(self, kind, to_number, content_hash):
-        return f"wa_evo_out:{kind}:{to_number}:{content_hash}"
+        scope = hashlib.sha256(f"{self.api_base}|{self.instance}".encode()).hexdigest()
+        return f"wa_evo_out:{scope}:{kind}:{to_number}:{content_hash}"
 
     def _acquire_dedup(self, kind, to_number, content, ttl=45):
         raw = (content or "").encode("utf-8", errors="ignore")
         content_hash = hashlib.sha1(raw).hexdigest()
         key = self._dedup_key(kind, to_number, content_hash)
         cache = frappe.cache()
-        if cache.get_value(key):
-            return False
-        cache.set_value(key, 1, expires_in_sec=ttl)
-        return True
+        # One atomic, site-scoped reservation across workers. Keep it long enough
+        # to cover all compatibility attempts, not just a single HTTP request.
+        self._dedup_reservation = (cache.make_key(key), uuid4().hex)
+        self._dedup_ttl = ttl
+        redis_key, owner = self._dedup_reservation
+        return bool(cache.set(redis_key, owner, nx=True, ex=max(ttl, 600)))
+
+    def _release_dedup(self):
+        reservation = getattr(self, "_dedup_reservation", None)
+        if reservation:
+            # Never delete a reservation belonging to a later attempt.
+            frappe.cache().eval(
+                "if redis.call('get', KEYS[1]) == ARGV[1] then "
+                "return redis.call('del', KEYS[1]) else return 0 end",
+                1, *reservation,
+            )
+
+    def _complete_dedup(self):
+        reservation = getattr(self, "_dedup_reservation", None)
+        if reservation:
+            try:
+                frappe.cache().eval(
+                    "if redis.call('get', KEYS[1]) == ARGV[1] then "
+                    "return redis.call('expire', KEYS[1], ARGV[2]) else return 0 end",
+                    1, *reservation, self._dedup_ttl,
+                )
+            except Exception:
+                # The send already succeeded. A cache outage must not turn it
+                # into a retryable failure; the longer reservation can expire.
+                pass
+
+    def _send_payloads(self, kind, urls, payloads, timeout):
+        errors = []
+        for url in urls:
+            for payload in payloads:
+                try:
+                    response = requests.post(
+                        url, json=payload, headers=self._headers(), timeout=timeout,
+                        allow_redirects=False,
+                    )
+                except requests.RequestException as exc:
+                    # A lost response does not prove the send failed. Trying a
+                    # different payload here can deliver the same message twice.
+                    raise EvolutionSendError(
+                        f"Evolution {kind} send outcome is unknown ({type(exc).__name__}). "
+                        "Check WhatsApp before retrying.", delivery_unknown=True,
+                    ) from exc
+
+                if 200 <= response.status_code < 300:
+                    self._complete_dedup()
+                    self._log_send_outcome(kind, "success", url, self._payload_shape(payload), response=response)
+                    return self._success_result(response)
+
+                code = response.status_code
+                body = (response.text or "").strip().replace("\n", " ")[:1000]
+                error = f"Evolution {kind} send rejected (HTTP {code}): {body}"
+                errors.append(error)
+                lower = body.lower()
+                # Only try alternate routes for missing routes, and alternate
+                # schemas when the API explicitly reports a schema mismatch.
+                if code == 404 and "cannot post" in lower:
+                    break
+                if code in (400, 422) and "requires property" in lower and not any(
+                    marker in lower for marker in ('"exists":false', '"exists": false', "sessionerror")
+                ):
+                    continue
+                unknown = code >= 500 or code == 408
+                if not unknown:
+                    self._release_dedup()
+                self._log_send_outcome(kind, "failed", error=error)
+                raise EvolutionSendError(
+                    error + (" Delivery is uncertain; check WhatsApp before retrying." if unknown else ""),
+                    delivery_unknown=unknown,
+                    allow_link_fallback=code in (413, 415),
+                )
+
+        self._release_dedup()
+        raise EvolutionSendError(errors[0] if errors else f"No usable Evolution {kind} payload or endpoint.")
 
     def _build_url(self, path_or_url):
         if not path_or_url:
@@ -321,40 +404,13 @@ class EvolutionProvider(BaseProvider):
         return self._ordered_payloads(v2_payloads, v1_payloads)
 
     def send_message(self, to_number, message, **kwargs):
+        if not (message or "").strip():
+            raise EvolutionSendError("Message text cannot be empty.")
         if not self._acquire_dedup("text", to_number, message or "", ttl=45):
-            return {"id": "dedup-skip"}
+            return {"skipped": True, "reason": "Duplicate or in-flight send suppressed; no new message sent."}
 
         payload_variants = self._text_payload_variants(to_number, message)
-
-        errors = []
-        seen_session_error = ""
-        for url in self._text_candidate_urls():
-            for payload in payload_variants:
-                try:
-                    response = requests.post(url, json=payload, headers=self._headers(), timeout=20)
-                    response.raise_for_status()
-                    self._log_send_outcome("text", "success", url, self._payload_shape(payload), response=response)
-                    return self._success_result(response)
-                except requests.HTTPError as e:
-                    session_error = self._extract_session_error(e.response)
-                    if session_error:
-                        seen_session_error = session_error
-                    status_code = e.response.status_code if e.response is not None else "?"
-                    body = ""
-                    if e.response is not None:
-                        body = (e.response.text or "").strip().replace("\n", " ")[:180]
-                    errors.append(f"{url} [{self._payload_shape(payload)}] -> {status_code} {body}".strip())
-                except Exception as e:
-                    errors.append(f"{url} [{self._payload_shape(payload)}] -> {str(e)}")
-
-        if seen_session_error:
-            self._log_send_outcome("text", "failed", error=seen_session_error)
-            raise frappe.ValidationError(
-                f"Evolution instance '{self.instance or '-'}' is not connected ({seen_session_error}). "
-                "Open Evolution Manager, connect the instance (QR), then retry."
-            )
-        self._log_send_outcome("text", "failed", error=", ".join(errors))
-        raise frappe.ValidationError(f"Evolution text send failed. Tried: {', '.join(errors)}")
+        return self._send_payloads("text", self._text_candidate_urls(), payload_variants, timeout=20)
 
     def send_media(self, to_number, media_url, media_type="document", caption="", media_bytes=None, filename=None):
         if media_bytes:
@@ -363,7 +419,7 @@ class EvolutionProvider(BaseProvider):
         else:
             dedup_content = f"{media_type}|{caption or ''}|{media_url or ''}|{filename or ''}"
         if not self._acquire_dedup("media", to_number, dedup_content, ttl=60):
-            return {"id": "dedup-skip"}
+            return {"skipped": True, "reason": "Duplicate or in-flight send suppressed; no new message sent."}
 
         media_type = (media_type or "document").lower()
         media_url = requests.utils.requote_uri(media_url or "")
@@ -414,39 +470,7 @@ class EvolutionProvider(BaseProvider):
             except Exception:
                 pass
 
-        errors = []
-        seen_session_error = ""
-        for url in self._media_candidate_urls():
-            for payload in payload_variants:
-                try:
-                    response = requests.post(url, json=payload, headers=self._headers(), timeout=25)
-                    response.raise_for_status()
-                    self._log_send_outcome("media", "success", url, self._payload_shape(payload), response=response)
-                    return self._success_result(response)
-                except requests.HTTPError as e:
-                    session_error = self._extract_session_error(e.response)
-                    if session_error:
-                        seen_session_error = session_error
-                    status_code = e.response.status_code if e.response is not None else "?"
-                    mode = self._media_payload_mode(payload)
-                    body = ""
-                    if e.response is not None:
-                        body = (e.response.text or "").strip().replace("\n", " ")[:180]
-                    errors.append(f"{url} [{self._payload_shape(payload)}:{mode}] -> {status_code} {body}".strip())
-                except Exception as e:
-                    mode = self._media_payload_mode(payload)
-                    errors.append(f"{url} [{self._payload_shape(payload)}:{mode}] -> {str(e)}")
-
-        if seen_session_error:
-            self._log_send_outcome("media", "failed", error=seen_session_error)
-            raise frappe.ValidationError(
-                f"Evolution instance '{self.instance or '-'}' is not connected ({seen_session_error}). "
-                "Open Evolution Manager, connect the instance (QR), then retry."
-            )
-        self._log_send_outcome("media", "failed", error=", ".join(errors))
-        raise frappe.ValidationError(
-            f"Evolution media send failed. Tried: {', '.join(errors)}"
-        )
+        return self._send_payloads("media", self._media_candidate_urls(), payload_variants, timeout=25)
 
     def parse_incoming(self, data):
         event = _normalize_event_type(data.get("event"))

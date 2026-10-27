@@ -180,6 +180,10 @@ class BulkWhatsAppMessage(Document):
                 message=frappe.get_traceback(),
             )
             return False
+        if wa_message.status not in {"Success", "Sent", "Delivered", "Read"}:
+            # Suppressed duplicates and uncertain outcomes are not new sends.
+            self.db_set("status", "Partially Failed")
+            return False
         # Update message count
         self.reload()
         self.db_set("sent_count", cint(self.sent_count) + 1)

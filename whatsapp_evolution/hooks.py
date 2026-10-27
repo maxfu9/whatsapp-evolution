@@ -145,7 +145,8 @@ scheduler_events = {
         "whatsapp_evolution.utils.trigger_whatsapp_notifications_all"
     ],
     "hourly": [
-        "whatsapp_evolution.utils.trigger_whatsapp_notifications_hourly"
+        "whatsapp_evolution.utils.trigger_whatsapp_notifications_hourly",
+        "whatsapp_evolution.utils.delivery.reconcile_stale_messages",
     ],
     "hourly_long": [
         "whatsapp_evolution.utils.trigger_whatsapp_notifications_hourly_long"
