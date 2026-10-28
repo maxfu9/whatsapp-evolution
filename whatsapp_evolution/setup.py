@@ -197,7 +197,7 @@ def _ensure_workspace_sidebar():
         {"type": "Link", "label": "Bulk WhatsApp Status", "link_to": "Bulk WhatsApp Status", "link_type": "Report", "indent": 0, "child": 1, "collapsible": 1, "keep_closed": 0, "show_arrow": 0},
     ]
     _save_standard_doc(
-        "Workspace Sidebar",
+        "Sidebar" if frappe.db.table_exists("Sidebar") else "Workspace Sidebar",
         MODULE_NAME,
         {
             "title": MODULE_NAME,

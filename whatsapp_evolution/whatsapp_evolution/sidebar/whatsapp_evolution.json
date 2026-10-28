@@ -1,0 +1,25 @@
+{
+ "doctype": "Sidebar",
+ "name": "WhatsApp Evolution",
+ "title": "WhatsApp Evolution",
+ "module": "WhatsApp Evolution",
+ "app": "whatsapp_evolution",
+ "standard": 1,
+ "header_icon": "message-circle",
+ "items": [
+  {"type":"Link","label":"WhatsApp Evolution","link_to":"WhatsApp Evolution","link_type":"Workspace","icon":"message-circle"},
+  {"type":"Link","label":"WhatsApp Message","link_to":"WhatsApp Message","link_type":"DocType","icon":"message-square"},
+  {"type":"Link","label":"Bulk WhatsApp Message","link_to":"Bulk WhatsApp Message","link_type":"DocType","icon":"send"},
+  {"type":"Section Break","label":"Configuration","icon":"settings","collapsible":1},
+  {"type":"Link","label":"WhatsApp Account","link_to":"WhatsApp Account","link_type":"DocType","child":1},
+  {"type":"Link","label":"WhatsApp Settings","link_to":"WhatsApp Settings","link_type":"DocType","child":1},
+  {"type":"Link","label":"WhatsApp Templates","link_to":"WhatsApp Templates","link_type":"DocType","child":1},
+  {"type":"Link","label":"WhatsApp Recipient List","link_to":"WhatsApp Recipient List","link_type":"DocType","child":1},
+  {"type":"Link","label":"WhatsApp Profiles","link_to":"WhatsApp Profiles","link_type":"DocType","child":1},
+  {"type":"Section Break","label":"Logs & Reports","icon":"file-text","collapsible":1},
+  {"type":"Link","label":"WhatsApp Notification","link_to":"WhatsApp Notification","link_type":"DocType","child":1},
+  {"type":"Link","label":"WhatsApp Notification Log","link_to":"WhatsApp Notification Log","link_type":"DocType","child":1},
+  {"type":"Link","label":"WhatsApp Deletion Request","link_to":"WhatsApp Deletion Request","link_type":"DocType","child":1},
+  {"type":"Link","label":"Bulk WhatsApp Status","link_to":"Bulk WhatsApp Status","link_type":"Report","child":1}
+ ]
+}

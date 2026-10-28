@@ -83,8 +83,10 @@ class TestDeletionTriggers(TestCase):
 class TestDeletionNavigation(TestCase):
     def test_migrate_setup_keeps_deletion_audit_visible(self):
         from whatsapp_evolution import setup
-        with patch.object(setup,'_save_standard_doc') as save:
+        with patch.object(setup,'_save_standard_doc') as save,patch.object(setup,'frappe') as fake:
+            fake.db.table_exists.return_value=True
             setup._ensure_workspace_sidebar()
+            self.assertEqual(save.call_args.args[0],'Sidebar')
             self.assertTrue(any(x.get('link_to')=='WhatsApp Deletion Request' for x in save.call_args.args[2]['items']))
             setup._ensure_workspace()
             self.assertTrue(any(x.get('link_to')=='WhatsApp Deletion Request' for x in save.call_args.args[2]['links']))
