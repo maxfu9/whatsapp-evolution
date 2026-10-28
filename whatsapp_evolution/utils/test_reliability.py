@@ -28,6 +28,20 @@ class TestWebhookSecurity(TestCase):
                     self.assertEqual(fake.local.response.http_status_code, 401)
 
 
+class TestTimelineWording(TestCase):
+    def test_direction_labels_keep_delivery_badge(self):
+        for direction, label in [('Outgoing', 'Sent to'), ('Incoming', 'Received from')]:
+            with self.subTest(direction=direction), patch.object(messages, 'frappe') as fake, \
+                 patch.object(messages, '_', side_effect=lambda value: value), \
+                 patch.object(messages, 'format_number', side_effect=lambda value: value):
+                fake.get_all.return_value = [Row(name='msg', type=direction, to='923001234567',
+                    status='Read', message='Hello', **{'from':'923001234567'})]
+                fake.utils.get_url_to_form.return_value = '/desk/whatsapp-message/msg'
+                content = messages.get_whatsapp_timeline_content('Sales Invoice', 'INV-1')[0]['content']
+                self.assertIn(label + ' 923001234567', content)
+                self.assertIn('wa-status-read', content)
+
+
 class TestReceiptStorage(TestCase):
     def setUp(self):
         clock=patch.object(receipts,'now_datetime',return_value='2026-10-28')

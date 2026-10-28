@@ -1741,7 +1741,7 @@ def get_whatsapp_timeline_content(doctype, docname):
     for row in rows:
         row_type = row.get("type") or ""
         phone = row.get("to") if row_type == "Outgoing" else row.get("from")
-        direction = _("Sent") if row_type == "Outgoing" else _("Received")
+        direction = _("Sent to") if row_type == "Outgoing" else _("Received from")
         status = row.get("status") or ""
         message = (row.get("message") or "").strip()
 
@@ -1763,7 +1763,7 @@ def get_whatsapp_timeline_content(doctype, docname):
         content = (
             "<div class='wa-timeline-item'>"
             f"<div class='wa-timeline-head'><a href='{doc_url}'>{escape(row.get('name') or '')}</a>"
-            f" · {escape(direction)} · {escape(format_number(phone or ''))} {status_html}</div>"
+            f" · {escape(direction)} {escape(format_number(phone or ''))} {status_html}</div>"
             f"<div class='wa-timeline-message'>{escape(message)}</div>"
             "</div>"
         )
