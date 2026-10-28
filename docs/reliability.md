@@ -47,3 +47,21 @@ numbers are retained without creating customers or contacts. Media is saved as
 private File attachments (20 MB maximum); failed media downloads retain the
 message with an explicit warning. Unsupported active content is stored as a
 binary download, never as an HTML/SVG document.
+
+## Invoice-linked message deletion
+
+Deleting a Sales/Purchase Invoice, or deleting its linked outgoing WhatsApp
+Message record, creates a separate WhatsApp Deletion Request. Cancellation
+alone does not request removal. Incoming and unrelated messages are not revoked.
+
+The request is queued only after the local delete commits. Pending local sends
+are stopped, while a Started send temporarily blocks deletion until it finishes.
+Invoice deletion unlinks retained message records so their Dynamic Links do not
+block deleting the invoice; the original invoice reference remains in the audit.
+
+The worker verifies the exact original outgoing message key and account before
+requesting delete-for-everyone. Requests outside two days are marked Expired.
+Requested means the API accepted the request, not proof of removal on every
+recipient device. Saved/downloaded copies cannot be recalled. Network-uncertain
+or interrupted attempts require review and are never retried automatically.
+No past deletions are retroactively processed.

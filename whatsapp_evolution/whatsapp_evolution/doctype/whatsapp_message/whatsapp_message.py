@@ -1115,6 +1115,8 @@ def enqueue_existing_message(name):
 
 
 def send_existing_message(name):
+    if not frappe.db.exists("WhatsApp Message", name):
+        return
     queued = frappe.get_doc("WhatsApp Message", name)
     if queued.message_type == "Template":
         return send_template_now(to=queued.to, reference_doctype=queued.reference_doctype,

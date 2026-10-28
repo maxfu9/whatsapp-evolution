@@ -148,6 +148,7 @@ scheduler_events = {
         "whatsapp_evolution.utils.trigger_whatsapp_notifications_hourly",
         "whatsapp_evolution.utils.delivery.reconcile_stale_messages",
         "whatsapp_evolution.utils.receipts.reconcile_receipts",
+        "whatsapp_evolution.utils.deletion.recover_deletions",
     ],
     "hourly_long": [
         "whatsapp_evolution.utils.trigger_whatsapp_notifications_hourly_long"
@@ -246,6 +247,7 @@ doc_events = {
         "on_update_after_submit": "whatsapp_evolution.utils.run_server_script_for_doc_event"
     },
     "Sales Invoice": {
+        "on_trash": "whatsapp_evolution.utils.deletion.invoice_deleted",
         "validate": "whatsapp_evolution.whatsapp_evolution.sales_invoice_balance.update_sales_invoice_whatsapp_balances",
         "on_submit": "whatsapp_evolution.whatsapp_evolution.sales_invoice_balance.update_sales_invoice_whatsapp_balances",
         "on_update_after_submit": "whatsapp_evolution.whatsapp_evolution.sales_invoice_balance.update_sales_invoice_whatsapp_balances",
@@ -255,6 +257,8 @@ doc_events = {
         "on_submit": "whatsapp_evolution.whatsapp_evolution.payment_entry_balance.update_payment_entry_whatsapp_balances",
         "on_update_after_submit": "whatsapp_evolution.whatsapp_evolution.payment_entry_balance.update_payment_entry_whatsapp_balances",
     },
+    "Purchase Invoice": {"on_trash": "whatsapp_evolution.utils.deletion.invoice_deleted"},
+    "WhatsApp Message": {"on_trash": "whatsapp_evolution.utils.deletion.message_deleted"},
 }
 
 override_whatsapp_webhook = {
