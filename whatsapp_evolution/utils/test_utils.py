@@ -386,7 +386,25 @@ class TestEvolutionProviderV2(TestCase):
         self.assertEqual(parsed["event"], "messages.update")
         self.assertEqual(parsed["message_id"], "3EB0C11694230BF9D6C89F")
         self.assertEqual(parsed["status"], 3)
-        self.assertEqual(_map_evolution_status(parsed["status"]), "Read")
+        self.assertEqual(_map_evolution_status(parsed["status"]), "Delivered")
+
+    def test_parse_v2_receipt_uses_key_id_not_database_id(self):
+        parsed = self._provider("v2").parse_incoming({
+            "event": "messages.update",
+            "data": {
+                "id": "database-update-id", "messageId": "database-message-id",
+                "keyId": "whatsapp-message-id", "status": "DELIVERY_ACK",
+                "fromMe": False,
+            },
+        })
+        self.assertEqual(parsed["message_id"], "whatsapp-message-id")
+        self.assertFalse(parsed["is_from_me"])
+
+    def test_numeric_statuses_match_evolution_baileys_enum(self):
+        for code, expected in {0: None, 1: "Sent", 2: "Sent", 3: "Delivered", 4: "Read", 5: "Played"}.items():
+            with self.subTest(code=code):
+                self.assertEqual(_map_evolution_status(code), expected)
+                self.assertEqual(_map_evolution_status(str(code)), expected)
 
     def test_status_mapper_accepts_delivery_and_read_aliases(self):
         self.assertEqual(_map_evolution_status("DELIVERY"), "Delivered")

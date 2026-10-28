@@ -541,10 +541,11 @@ class EvolutionProvider(BaseProvider):
 
             return {
                 "event": event,
-                "message_id": key.get("id") or payload.get("id"),
+                # Evolution v2 uses keyId; id/messageId may be database row IDs.
+                "message_id": payload.get("keyId") or key.get("id") or payload.get("id"),
                 "status": status,
                 "to": (key.get("remoteJid") or payload.get("remoteJid") or "").split("@")[0],
-                "is_from_me": key.get("fromMe", True),
+                "is_from_me": key.get("fromMe", payload.get("fromMe", True)),
             }
 
         return {"event": event}
@@ -623,23 +624,23 @@ def _map_evolution_status(status_value):
             status_value = int(raw)
         else:
             text = raw.upper()
-            if text in {"PENDING", "SERVER_ACK", "SENT", "ACK", "1"}:
+            if text in {"PENDING", "SERVER_ACK", "SENT", "ACK"}:
                 return "Sent"
-            if text in {"DELIVERY_ACK", "DELIVERED", "DELIVERY", "2"}:
+            if text in {"DELIVERY_ACK", "DELIVERED", "DELIVERY"}:
                 return "Delivered"
-            if text in {"READ", "READ_ACK", "READ_RECEIPT", "3"}:
+            if text in {"READ", "READ_ACK", "READ_RECEIPT"}:
                 return "Read"
-            if text in {"PLAYED", "4"}:
+            if text == "PLAYED":
                 return "Played"
             return None
 
     if isinstance(status_value, (int, float)):
         status_map = {
-            0: "Sent",
             1: "Sent",
-            2: "Delivered",
-            3: "Read",
-            4: "Played",
+            2: "Sent",
+            3: "Delivered",
+            4: "Read",
+            5: "Played",
         }
         return status_map.get(int(status_value))
 
@@ -658,13 +659,16 @@ def _message_id_candidates(message_id):
     return list(variants)
 
 
-def _find_message_name_by_id(message_id):
+def _find_message_name_by_id(message_id, account_name=None):
     candidates = _message_id_candidates(message_id)
     if not candidates:
         return None
+    filters = {"message_id": ["in", candidates], "type": "Outgoing"}
+    if account_name:
+        filters["whatsapp_account"] = account_name
     rows = frappe.get_all(
         "WhatsApp Message",
-        filters={"message_id": ["in", candidates]},
+        filters=filters,
         fields=["name", "status"],
         order_by="modified desc",
         limit_page_length=1,
@@ -773,7 +777,7 @@ def handle_webhook():
             if msg.get("is_from_me"):
                 # Update outgoing message status if we find it by ID
                 if msg.get("message_id"):
-                    found = _find_message_name_by_id(msg.get("message_id"))
+                    found = _find_message_name_by_id(msg.get("message_id"), account_name) if account_name else None
                     if found and _status_rank("Sent") >= _status_rank(found.get("status")):
                         frappe.db.set_value("WhatsApp Message", found.get("name"), "status", "Sent")
                 return "OK"
@@ -782,6 +786,8 @@ def handle_webhook():
             handle_incoming_message(msg, whatsapp_account=account_name)
 
         elif event_type == "messages.update":
+            if not account_name or msg.get("is_from_me") is False:
+                return "Ignored receipt for unknown account or incoming message"
             status_code = msg.get("status")
             message_id = msg.get("message_id")
             key_data = payload_data.get("key") if isinstance(payload_data, dict) else {}
@@ -806,10 +812,10 @@ def handle_webhook():
 
             if status_code is not None:
                 if status_text:
-                    found_by_id = _find_message_name_by_id(message_id) if message_id else None
+                    found_by_id = _find_message_name_by_id(message_id, account_name) if message_id else None
                     found = found_by_id
-                    if not found and remote_jid:
-                        found = _find_recent_outgoing_by_number(remote_jid, account_name=account_name)
+                    # A phone-number match is not evidence for this message.
+                    # Never apply a receipt to another send to the same person.
                     if found and _status_rank(status_text) >= _status_rank(found.get("status")):
                         frappe.db.set_value("WhatsApp Message", found.get("name"), "status", status_text)
                         _log_webhook_debug(
@@ -819,7 +825,7 @@ def handle_webhook():
                                 "docname": found.get("name"),
                                 "previous_status": found.get("status"),
                                 "new_status": status_text,
-                                "fallback_by_number": bool(not found_by_id and remote_jid),
+                                "fallback_by_number": False,
                             }
                         )
                     else:

@@ -11,10 +11,61 @@ import frappe
 import requests
 
 from whatsapp_evolution.utils import delivery
+from whatsapp_evolution.whatsapp_evolution.providers import evolution
 from whatsapp_evolution.whatsapp_evolution.providers.evolution import EvolutionProvider, EvolutionSendError
 from whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_message import whatsapp_message as messages
 from whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_notification import whatsapp_notification as notifications
 from whatsapp_evolution.whatsapp_evolution.doctype.bulk_whatsapp_message.bulk_whatsapp_message import BulkWhatsAppMessage
+
+
+class TestReceiptWebhook(TestCase):
+    def run_receipt(self, status="DELIVERY_ACK", current="Success", found=True, account="786", from_me=True):
+        payload = {
+            "event": "messages.update", "instance": "786",
+            "data": {"keyId": "provider-id", "id": "database-row-id",
+                     "status": status, "fromMe": from_me,
+                     "remoteJid": "923001234567@s.whatsapp.net"},
+        }
+        with patch.object(evolution, "frappe") as fake, \
+             patch.object(evolution, "_account_name_from_instance", return_value=account), \
+             patch.object(evolution, "_log_webhook_debug"), \
+             patch.object(evolution, "_find_recent_outgoing_by_number") as fallback:
+            fake.local.request.get_json.return_value = payload
+            fake.get_single.return_value.as_dict.return_value = {}
+            fake.get_all.return_value = [{"name": "target-message", "status": current}] if found else []
+            handler = evolution.handle_webhook
+            while hasattr(handler, "__wrapped__"):
+                handler = handler.__wrapped__
+            handler()
+            fake.log_error.assert_not_called()
+            fallback.assert_not_called()
+            return fake
+
+    def test_v2_receipt_updates_exact_account_message(self):
+        fake = self.run_receipt()
+        fake.db.set_value.assert_called_once_with("WhatsApp Message", "target-message", "status", "Delivered")
+        filters = fake.get_all.call_args.kwargs["filters"]
+        self.assertIn("provider-id", filters["message_id"][1])
+        self.assertNotIn("database-row-id", filters["message_id"][1])
+        self.assertEqual(filters["whatsapp_account"], "786")
+        self.assertEqual(filters["type"], "Outgoing")
+
+    def test_read_receipt_advances_delivered_message(self):
+        fake = self.run_receipt(status="READ", current="Delivered")
+        fake.db.set_value.assert_called_once_with("WhatsApp Message", "target-message", "status", "Read")
+
+    def test_delayed_delivery_receipt_cannot_downgrade_read(self):
+        self.run_receipt(current="Read").db.set_value.assert_not_called()
+
+    def test_unmatched_receipt_cannot_update_another_send(self):
+        self.run_receipt(found=False).db.set_value.assert_not_called()
+
+    def test_unknown_account_and_incoming_receipts_are_ignored(self):
+        for kwargs in ({"account": None}, {"from_me": False}):
+            with self.subTest(kwargs=kwargs):
+                fake = self.run_receipt(**kwargs)
+                fake.get_all.assert_not_called()
+                fake.db.set_value.assert_not_called()
 
 
 class FakeCache:
