@@ -558,7 +558,7 @@ class WhatsAppNotification(Document):
             elif self.get("_data_list"):
                 # allow send a dynamic template using schedule event config
                 # _doc_list shoud be [{"name": "xxx", "phone_no": "123"}]
-                for data in self._data_list:
+                for data in self.get("_data_list") or []:
                     doc = frappe.get_doc(self.reference_doctype, data.get("name"))
 
                     self.send_template_message(doc, data.get("phone_no"), template, True)
@@ -567,7 +567,7 @@ class WhatsAppNotification(Document):
 
     def send_simple_template(self, template):
         """ send simple template without a doc to get field data """
-        for contact in self._contact_list:
+        for contact in self.get("_contact_list") or []:
             data = {
                 "messaging_product": "whatsapp",
                 "to": self.format_number(contact),

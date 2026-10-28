@@ -2,7 +2,19 @@
 
 import frappe
 from frappe.utils import add_to_date, now_datetime
-from frappe.utils.background_jobs import get_job
+from frappe.utils import background_jobs
+
+
+def get_job(job_id):
+    """Use the native helper, with the equivalent RQ lookup on Frappe v14."""
+    if hasattr(background_jobs, "get_job"):
+        return background_jobs.get_job(job_id)
+    from rq.exceptions import NoSuchJobError
+    from rq.job import Job
+    try:
+        return Job.fetch(background_jobs.create_job_id(job_id), connection=background_jobs.get_redis_conn())
+    except NoSuchJobError:
+        return None
 
 
 def send_status(response=None, error=None):

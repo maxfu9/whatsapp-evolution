@@ -1,23 +1,60 @@
 name: Pylint
 
-on: [push]
+on: [push, pull_request]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pylint-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python-version: ["3.8", "3.9", "3.10"]
+  quality:
+    name: Python 3.14 / Frappe v16
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      FRAPPE_STREAM_LOGGING: "1"
     steps:
-    - uses: actions/checkout@v3
-    - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v3
-      with:
-        python-version: ${{ matrix.python-version }}
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install pylint
-    - name: Analysing the code with pylint
-      run: |
-        pylint $(git ls-files '*.py')
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: frappe/frappe
+          ref: v16.25.0
+          path: .ci-deps/frappe
+      - uses: actions/checkout@v4
+        with:
+          repository: frappe/erpnext
+          ref: v16.26.1
+          path: .ci-deps/erpnext
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            ci_tools/requirements.txt
+            .ci-deps/frappe/pyproject.toml
+            .ci-deps/erpnext/pyproject.toml
+      - name: Native dependencies
+        run: sudo apt-get update && sudo apt-get install -y libmariadb-dev pkg-config libmagic1
+      - name: Install pinned tools and real framework dependencies
+        run: python -m pip install -r ci_tools/requirements.txt -e .ci-deps/frappe -e .ci-deps/erpnext -e .
+      - name: Pylint errors and style-debt ratchet
+        run: python -m ci_tools.lint
+      - name: Offline regression tests (no site or WhatsApp credentials)
+        run: >-
+          python -m unittest
+          ci_tools.test_quality
+          whatsapp_evolution.utils.test_deletion
+          whatsapp_evolution.utils.test_reliability
+          whatsapp_evolution.utils.test_delivery
+          whatsapp_evolution.utils.test_utils.TestEvolutionProviderV2
+      - name: Upload complete lint report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pylint-report
+          path: artifacts/pylint.json
+          if-no-files-found: ignore

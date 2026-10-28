@@ -4,7 +4,7 @@
 from unittest.mock import patch, MagicMock
 
 import frappe
-from whatsapp_evolution.testing import IntegrationTestCase
+from whatsapp_evolution.testing import IntegrationTestCase, configure_evolution_test_account
 
 
 class TestWhatsAppNotification(IntegrationTestCase):
@@ -60,6 +60,7 @@ class TestWhatsAppNotification(IntegrationTestCase):
         # Set password within each test's transaction scope
         from frappe.utils.password import set_encrypted_password
         set_encrypted_password("WhatsApp Account", "Test WA Notif Account", "test_notif_token", "token")
+        configure_evolution_test_account("Test WA Notif Account")
         # Clear ALL defaults then set ours (db.set_value bypasses on_update hooks)
         frappe.db.sql("UPDATE `tabWhatsApp Account` SET is_default_outgoing=0, is_default_incoming=0")
         frappe.db.set_value("WhatsApp Account", "Test WA Notif Account", {
@@ -183,7 +184,7 @@ class TestWhatsAppNotification(IntegrationTestCase):
         user = frappe.get_doc("User", "Administrator")
         user.mobile_no = "919900112233"
 
-        doc.send_template_message(user)
+        doc.send_template_message(user, from_queue=True)
 
         self.assertTrue(mock_send.called)
         self.assertEqual(mock_send.call_args.args[0], "919900112233")
@@ -203,7 +204,7 @@ class TestWhatsAppNotification(IntegrationTestCase):
         user = frappe.get_doc("User", "Administrator")
         user.mobile_no = "919900112234"
         user.save(ignore_permissions=True)
-        doc.send_template_message(user)
+        doc.send_template_message(user, from_queue=True)
 
         self.assertTrue(mock_send.called)
         self.assertEqual(mock_send.call_args.args[0], "919900112234")
@@ -224,7 +225,7 @@ class TestWhatsAppNotification(IntegrationTestCase):
         user = frappe.get_doc("User", "Administrator")
         user.mobile_no = "919900112299"
         user.enabled = 1
-        doc.send_template_message(user)
+        doc.send_template_message(user, from_queue=True)
         self.assertTrue(mock_send.called)
 
     @patch("whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_notification.whatsapp_notification.EvolutionProvider.send_message")

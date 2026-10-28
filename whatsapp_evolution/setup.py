@@ -116,12 +116,14 @@ def _save_standard_doc(doctype, name, values):
     if frappe.db.exists(doctype, name):
         doc = frappe.get_doc(doctype, name)
         doc.update(values)
+        # App-owned standard Desk records are installed without an interactive
+        # user's permission context. Existing named records use save.
+        doc.save(ignore_permissions=True)
     else:
         doc = frappe.get_doc(values)
-
-    # These are application-owned standard Desk records installed during migrate,
-    # so there is no interactive user permission context to honor here.
-    doc.save(ignore_permissions=True)
+        # An explicit name does not make a new document persistent. Insert is
+        # required on a fresh site; save would try to load the missing record.
+        doc.insert(ignore_permissions=True)
     return doc
 
 

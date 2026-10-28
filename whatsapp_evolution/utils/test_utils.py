@@ -166,7 +166,8 @@ class TestGetEvolutionSettings(IntegrationTestCase):
         settings.evolution_api_version = ""
         settings.save(ignore_permissions=True)
 
-        effective = get_evolution_settings()
+        with patch("whatsapp_evolution.utils.get_default_evolution_account", return_value=None):
+            effective = get_evolution_settings()
         self.assertEqual(effective.get("evolution_api_version"), "v1")
 
     def test_uses_selected_api_version(self):
@@ -174,7 +175,8 @@ class TestGetEvolutionSettings(IntegrationTestCase):
         settings.evolution_api_version = "v2"
         settings.save(ignore_permissions=True)
 
-        effective = get_evolution_settings()
+        with patch("whatsapp_evolution.utils.get_default_evolution_account", return_value=None):
+            effective = get_evolution_settings()
         self.assertEqual(effective.get("evolution_api_version"), "v2")
 
     def test_account_api_version_overrides_global(self):

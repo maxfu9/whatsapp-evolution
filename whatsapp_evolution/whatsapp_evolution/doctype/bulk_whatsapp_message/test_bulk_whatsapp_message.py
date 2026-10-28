@@ -5,7 +5,7 @@ import json
 from unittest.mock import patch
 
 import frappe
-from whatsapp_evolution.testing import IntegrationTestCase
+from whatsapp_evolution.testing import IntegrationTestCase, configure_evolution_test_account
 
 
 class TestBulkWhatsAppMessage(IntegrationTestCase):
@@ -62,6 +62,7 @@ class TestBulkWhatsAppMessage(IntegrationTestCase):
         # Set password within each test's transaction scope
         from frappe.utils.password import set_encrypted_password
         set_encrypted_password("WhatsApp Account", "Test WA Bulk Account", "test_bulk_token", "token")
+        configure_evolution_test_account("Test WA Bulk Account")
         # Clear ALL defaults then set ours (db.set_value bypasses on_update hooks)
         frappe.db.sql("UPDATE `tabWhatsApp Account` SET is_default_outgoing=0, is_default_incoming=0")
         frappe.db.set_value("WhatsApp Account", "Test WA Bulk Account", {
@@ -210,7 +211,7 @@ class TestBulkWhatsAppMessage(IntegrationTestCase):
             "status": "Failed",
             "bulk_message_reference": doc.name,
             "whatsapp_account": "Test WA Bulk Account",
-            "message_id": "wamid.failed_bulk_1",
+            "message_id": "",
         })
         failed_msg.flags.ignore_validate = True
         failed_msg.db_insert()

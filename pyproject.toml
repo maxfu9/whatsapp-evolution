@@ -21,3 +21,10 @@ build-backend = "flit_core.buildapi"
 
 [tool.bench.frappe-dependencies]
 frappe = ">=14.0.0"
+
+[tool.pylint.main]
+load-plugins = ["ci_tools.pylint_frappe"]
+persistent = false
+
+[tool.pylint.format]
+max-line-length = 120

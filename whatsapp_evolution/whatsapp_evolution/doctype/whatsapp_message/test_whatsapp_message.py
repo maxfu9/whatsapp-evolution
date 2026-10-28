@@ -1,10 +1,10 @@
 # Copyright (c) 2022, Shridhar Patil and Contributors
 # See license.txt
 
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 import frappe
-from whatsapp_evolution.testing import IntegrationTestCase
+from whatsapp_evolution.testing import IntegrationTestCase, configure_evolution_test_account
 
 
 class TestWhatsAppMessage(IntegrationTestCase):
@@ -39,6 +39,7 @@ class TestWhatsAppMessage(IntegrationTestCase):
         # Set password within each test's transaction scope
         from frappe.utils.password import set_encrypted_password
         set_encrypted_password("WhatsApp Account", "Test WA Msg Account", "test_token_123", "token")
+        configure_evolution_test_account("Test WA Msg Account")
         # Clear ALL defaults then set ours (db.set_value bypasses on_update hooks)
         frappe.db.sql("UPDATE `tabWhatsApp Account` SET is_default_outgoing=0, is_default_incoming=0")
         frappe.db.set_value("WhatsApp Account", "Test WA Msg Account", {
@@ -54,6 +55,13 @@ class TestWhatsAppMessage(IntegrationTestCase):
         for name in frappe.get_all("WhatsApp Profiles", filters={"number": ["like", "9199%"]}, pluck="name"):
             frappe.delete_doc("WhatsApp Profiles", name, force=True)
         frappe.db.commit()
+
+    def _run_queued(self, doc):
+        """Exercise the committed worker explicitly while its provider is mocked."""
+        from whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_message.whatsapp_message import send_existing_message
+        self.assertEqual(doc.status, "Queued")
+        send_existing_message(doc.name)
+        doc.reload()
 
     def test_incoming_message_creation(self):
         """Test creating an incoming WhatsApp message."""
@@ -98,6 +106,7 @@ class TestWhatsAppMessage(IntegrationTestCase):
         })
         doc.insert(ignore_permissions=True)
 
+        self._run_queued(doc)
         self.assertEqual(doc.message_id, "wamid.test_outgoing_1")
         self.assertEqual(doc.status, "Success")
         mock_send.assert_called_once_with("919900112255", "Hello from test")
@@ -117,6 +126,7 @@ class TestWhatsAppMessage(IntegrationTestCase):
         })
         doc.insert(ignore_permissions=True)
 
+        self._run_queued(doc)
         mock_send.assert_called_once_with("919900112256", "Test plus strip")
 
     @patch("whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_message.whatsapp_message.EvolutionProvider.send_message")
@@ -136,6 +146,7 @@ class TestWhatsAppMessage(IntegrationTestCase):
         })
         doc.insert(ignore_permissions=True)
 
+        self._run_queued(doc)
         mock_send.assert_called_once_with("919900112257", "Reply test")
 
     @patch("whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_message.whatsapp_message.EvolutionProvider.send_media")
@@ -154,6 +165,7 @@ class TestWhatsAppMessage(IntegrationTestCase):
         })
         doc.insert(ignore_permissions=True)
 
+        self._run_queued(doc)
         call_args = mock_send_media.call_args
         self.assertEqual(call_args.kwargs["to_number"], "919900112258")
         self.assertEqual(call_args.kwargs["media_url"], "https://example.com/image.jpg")
@@ -176,6 +188,7 @@ class TestWhatsAppMessage(IntegrationTestCase):
         })
         doc.insert(ignore_permissions=True)
 
+        self._run_queued(doc)
         mock_send.assert_called_once_with("919900112259", "\U0001f44d")
 
     def test_create_whatsapp_profile_on_insert(self):
@@ -248,22 +261,16 @@ class TestWhatsAppMessage(IntegrationTestCase):
     def test_outgoing_message_api_failure(self, mock_send):
         """Test that outgoing message handles API failure."""
         mock_send.side_effect = Exception("API Error")
-        frappe.flags.integration_request = MagicMock()
-        frappe.flags.integration_request.json.return_value = {
-            "error": {"message": "Invalid phone number", "error_user_title": "Error"}
-        }
-
-        with self.assertRaises(frappe.ValidationError):
-            doc = frappe.get_doc({
-                "doctype": "WhatsApp Message",
-                "type": "Outgoing",
-                "to": "919900112270",
-                "message": "Fail test",
-                "message_type": "Manual",
-                "content_type": "text",
-                "whatsapp_account": "Test WA Msg Account",
-            })
-            doc.insert(ignore_permissions=True)
+        doc = frappe.get_doc({
+            "doctype": "WhatsApp Message", "type": "Outgoing", "to": "919900112270",
+            "message": "Fail test", "message_type": "Manual", "content_type": "text",
+            "whatsapp_account": "Test WA Msg Account",
+        })
+        # This fixture is created by the test, independently of Desk permissions.
+        doc.insert(ignore_permissions=True)
+        self._run_queued(doc)
+        self.assertEqual(doc.status, "Failed")
+        self.assertIn("API Error", doc.last_error)
 
     @patch("whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_message.whatsapp_message.frappe.enqueue")
     def test_send_template_whitelisted(self, mock_enqueue):

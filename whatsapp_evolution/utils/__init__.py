@@ -262,7 +262,7 @@ def get_evolution_settings(whatsapp_account=None):
     base = (account_doc.get("evolution_api_base") if account_doc else None) or settings_doc.get("evolution_api_base")
     token = (
         (account_doc.get_password("evolution_api_token", raise_exception=False) if account_doc else None)
-        or settings_doc.get_password("evolution_api_token")
+        or settings_doc.get_password("evolution_api_token", raise_exception=False)
     )
     instance = (account_doc.get("evolution_instance") if account_doc else None)
     send_endpoint = (

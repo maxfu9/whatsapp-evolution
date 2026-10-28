@@ -1533,7 +1533,7 @@ def get_linked_contacts_query(doctype, txt, searchfield, start, page_len, filter
         return []
     tick_condition = "and (" + " or ".join([f"ifnull(cp.{tf}, 0) = 1" for tf in tick_fields]) + ")"
 
-    searchfield = sanitize_searchfield(searchfield)
+    sanitize_searchfield(searchfield)
     return frappe.db.sql(
         f"""
         select distinct

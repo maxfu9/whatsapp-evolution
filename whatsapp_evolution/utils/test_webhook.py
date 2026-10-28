@@ -93,7 +93,7 @@ class TestWebhookHelpers(IntegrationTestCase):
         update_message_status(data)
 
         msg.reload()
-        self.assertEqual(msg.status, "delivered")
+        self.assertEqual(msg.status, "Delivered")
         self.assertEqual(msg.conversation_id, "conv_123")
 
     def test_update_message_status_without_conversation(self):
@@ -120,7 +120,7 @@ class TestWebhookHelpers(IntegrationTestCase):
         update_message_status(data)
 
         msg.reload()
-        self.assertEqual(msg.status, "sent")
+        self.assertEqual(msg.status, "Sent")
 
     def test_update_template_status(self):
         """Test update_template_status updates template status via SQL."""
@@ -227,8 +227,8 @@ class TestWebhookEndpoint(IntegrationTestCase):
 
         with patch("whatsapp_evolution.utils.webhook.frappe.request", mock_request):
             from whatsapp_evolution.utils.webhook import webhook
-            with self.assertRaises(frappe.ValidationError):
-                webhook()
+            self.assertEqual(webhook(), "Webhook processing failed")
+            self.assertEqual(frappe.local.response.http_status_code, 500)
 
     def test_webhook_post_text_message(self):
         """Test POST webhook with incoming text message."""
@@ -396,7 +396,7 @@ class TestWebhookEndpoint(IntegrationTestCase):
             webhook()
 
         msg.reload()
-        self.assertEqual(msg.status, "read")
+        self.assertEqual(msg.status, "Read")
         self.assertEqual(msg.conversation_id, "conv_456")
 
     def test_webhook_creates_notification_log(self):

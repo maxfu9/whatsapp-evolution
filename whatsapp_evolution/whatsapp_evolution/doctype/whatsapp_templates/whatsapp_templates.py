@@ -73,11 +73,10 @@ class WhatsAppTemplates(Document):
         self._media_id = response['h']
 
     def get_absolute_path(self, file_name):
-        if(file_name.startswith('/files/')):
-            file_path = f'{frappe.utils.get_bench_path()}/sites/{frappe.utils.get_site_base_path()[2:]}/public{file_name}'
-        if(file_name.startswith('/private/')):
-            file_path = f'{frappe.utils.get_bench_path()}/sites/{frappe.utils.get_site_base_path()[2:]}{file_name}'
-        return file_path
+        if not isinstance(file_name, str) or not file_name.startswith(("/files/", "/private/files/")):
+            frappe.throw(_("Select a local public or private file attachment."))
+        from frappe.utils.file_manager import get_file_path
+        return get_file_path(file_name)
 
 
     def after_insert(self):
