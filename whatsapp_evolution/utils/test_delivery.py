@@ -19,13 +19,15 @@ from whatsapp_evolution.whatsapp_evolution.doctype.bulk_whatsapp_message.bulk_wh
 
 
 class TestReceiptWebhook(TestCase):
-    def run_receipt(self, status="DELIVERY_ACK", current="Success", found=True, account="786", from_me=True):
+    def run_receipt(self, status="DELIVERY_ACK", current="Success", found=True, account="786", from_me=True, batch=None):
         payload = {
             "event": "messages.update", "instance": "786",
             "data": {"keyId": "provider-id", "id": "database-row-id",
                      "status": status, "fromMe": from_me,
                      "remoteJid": "923001234567@s.whatsapp.net"},
         }
+        if batch is not None:
+            payload["data"] = batch
         with patch.object(evolution, "frappe") as fake, \
              patch.object(evolution, "_account_name_from_instance", return_value=account), \
              patch.object(evolution, "_log_webhook_debug"), \
@@ -53,6 +55,22 @@ class TestReceiptWebhook(TestCase):
     def test_read_receipt_advances_delivered_message(self):
         fake = self.run_receipt(status="READ", current="Delivered")
         fake.db.set_value.assert_called_once_with("WhatsApp Message", "target-message", "status", "Read")
+
+    def test_read_receipt_after_ignored_entry_in_batch_is_processed(self):
+        fake = self.run_receipt(current="Delivered", batch=[
+            {"keyId": "incoming-id", "status": "READ", "fromMe": False},
+            {"keyId": "provider-id", "status": "READ", "fromMe": True},
+        ])
+        fake.db.set_value.assert_called_once_with("WhatsApp Message", "target-message", "status", "Read")
+
+    def test_read_receipt_after_malformed_entry_is_processed(self):
+        fake = self.run_receipt(current="Delivered", batch=[None,
+            {"keyId": "provider-id", "status": 4, "fromMe": True},
+        ])
+        fake.db.set_value.assert_called_once_with("WhatsApp Message", "target-message", "status", "Read")
+
+    def test_empty_receipt_batch_does_not_change_status(self):
+        self.run_receipt(batch=[]).db.set_value.assert_not_called()
 
     def test_delayed_delivery_receipt_cannot_downgrade_read(self):
         self.run_receipt(current="Read").db.set_value.assert_not_called()

@@ -757,12 +757,28 @@ def _account_name_from_instance(instance_name):
 
 @frappe.whitelist(allow_guest=True)
 def handle_webhook():
-    try:
-        request = frappe.local.request
-        data = request.get_json(silent=True) or frappe._dict(frappe.form_dict)
-        if not data:
-            return "No payload"
+    request = frappe.local.request
+    data = request.get_json(silent=True) or frappe._dict(frappe.form_dict)
+    if not data:
+        return "No payload"
+    if not isinstance(data, dict):
+        return "Invalid payload"
 
+    # Read receipts can arrive after other updates in the same batch. Process
+    # every entry, retaining the envelope's instance for account matching.
+    if _normalize_event_type(data.get("event")) == "messages.update" and isinstance(data.get("data"), list):
+        for receipt in data["data"]:
+            if not isinstance(receipt, dict):
+                continue
+            result = _handle_webhook_payload({**data, "data": receipt})
+            if result == "Webhook processing failed":
+                return result
+        return "OK"
+    return _handle_webhook_payload(data)
+
+
+def _handle_webhook_payload(data):
+    try:
         event_type = _normalize_event_type(data.get("event"))
         if not event_type:
             return "No event"
