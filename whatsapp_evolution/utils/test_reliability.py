@@ -39,7 +39,9 @@ class TestReceiptStorage(TestCase):
             fake.db.get_value.return_value = None
             self.assertFalse(receipts.apply_receipt('786', 'id', 'Read'))
             fake.get_doc.return_value.insert.assert_called_once_with(ignore_permissions=True, ignore_if_duplicate=True)
-            fake.db.set_value.assert_not_called()
+            fake.db.set_value.assert_called_once()
+            self.assertEqual(fake.db.set_value.call_args.args[0], 'WhatsApp Delivery Receipt')
+            self.assertEqual(fake.db.set_value.call_args.args[2], 'modified')
 
     def test_status_lock_and_no_downgrade(self):
         with patch.object(receipts, 'frappe') as fake:

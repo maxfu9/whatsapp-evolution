@@ -39,6 +39,9 @@ def apply_receipt(account, message_id, status, received_on=None):
         "message_id": message_id, "whatsapp_account": account, "type": "Outgoing",
     }, ["name", "status", "sent_at", "delivered_at", "read_at"], as_dict=True, for_update=True)
     if not row:
+        # Rotate unmatched receipts (including sends made outside this app),
+        # rather than retrying the same oldest 200 forever.
+        frappe.db.set_value("WhatsApp Delivery Receipt", name, "modified", now_datetime(), update_modified=False)
         return False
     values = {}
     if _status_rank(status) > _status_rank(row.status):
@@ -100,7 +103,7 @@ def refresh_message_status(name):
 def reconcile_receipts():
     pending = frappe.get_all("WhatsApp Delivery Receipt", filters={"applied": 0},
                              fields=["whatsapp_account", "message_id", "status", "received_on"],
-                             limit_page_length=200, order_by="creation asc")
+                             limit_page_length=200, order_by="modified asc, creation asc")
     for row in pending:
         apply_receipt(row.whatsapp_account, row.message_id, row.status, row.received_on)
         frappe.db.commit()
