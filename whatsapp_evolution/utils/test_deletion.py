@@ -31,13 +31,13 @@ class TestDeletionTriggers(TestCase):
             self.assertTrue(fake.enqueue.call_args.kwargs['enqueue_after_commit'])
             self.assertEqual(fake.get_doc.call_args.args[0]['source_doctype'],'WhatsApp Message')
 
-    def test_invoice_delete_captures_audit_and_unlinks_message(self):
+    def test_invoice_delete_captures_audit_and_deletes_message(self):
         with patch.object(deletion,'frappe') as fake,patch.object(deletion,'_locked_message',return_value=message()):
             fake.get_all.return_value=['message-record'];fake.db.exists.return_value=False
             deletion.invoice_deleted(SimpleNamespace(doctype='Sales Invoice',name='INV-1'))
             self.assertEqual(fake.get_doc.call_args.args[0]['reference_name'],'INV-1')
             self.assertEqual(fake.get_doc.call_args.args[0]['source_doctype'],'Sales Invoice')
-            fake.db.set_value.assert_called_once_with('WhatsApp Message','message-record',{'reference_doctype':'','reference_name':''})
+            fake.delete_doc.assert_called_once_with('WhatsApp Message','message-record',ignore_permissions=True)
 
     def test_payment_entry_message_delete_queues_request(self):
         with patch.object(deletion,'frappe') as fake,patch.object(deletion,'_locked_message',return_value=message(reference_doctype='Payment Entry',reference_name='PAY-1')):
@@ -53,7 +53,22 @@ class TestDeletionTriggers(TestCase):
             data=fake.get_doc.call_args.args[0]
             self.assertEqual(data['source_doctype'],'Payment Entry')
             self.assertEqual(data['reference_doctype'],'Payment Entry')
-            fake.db.set_value.assert_called_once_with('WhatsApp Message','message-record',{'reference_doctype':'','reference_name':''})
+            fake.delete_doc.assert_called_once_with('WhatsApp Message','message-record',ignore_permissions=True)
+
+    def test_cascade_failure_propagates_to_abort_source_deletion(self):
+        with patch.object(deletion,'frappe') as fake,patch.object(deletion,'_locked_message',return_value=message()):
+            fake.get_all.return_value=['message-record'];fake.db.exists.return_value=False
+            fake.delete_doc.side_effect=ValueError('linked record blocks deletion')
+            with self.assertRaises(ValueError):
+                deletion.invoice_deleted(SimpleNamespace(doctype='Sales Invoice',name='INV-1'))
+            fake.db.commit.assert_not_called()
+
+    def test_cascade_cleans_incoming_locally_without_remote_revoke(self):
+        with patch.object(deletion,'frappe') as fake,patch.object(deletion,'_locked_message',return_value=message(type='Incoming')):
+            fake.get_all.return_value=['message-record']
+            deletion.invoice_deleted(SimpleNamespace(doctype='Sales Invoice',name='INV-1'))
+            fake.delete_doc.assert_called_once_with('WhatsApp Message','message-record',ignore_permissions=True)
+            fake.enqueue.assert_not_called()
 
     def test_payment_entry_hook_is_delete_only(self):
         from whatsapp_evolution.hooks import doc_events

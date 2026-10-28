@@ -56,8 +56,10 @@ alone does not request removal. Incoming and unrelated messages are not revoked.
 
 The request is queued only after the local delete commits. Pending local sends
 are stopped, while a Started send temporarily blocks deletion until it finishes.
-Invoice deletion unlinks retained message records so their Dynamic Links do not
-block deleting the invoice; the original invoice reference remains in the audit.
+Source deletion also deletes its linked ERPNext WhatsApp Message records through
+normal delete hooks. The original document reference remains in the separate
+deletion audit. A failed source/message deletion rolls the whole transaction
+back. Incoming messages are removed locally only, never revoked from the sender.
 
 The worker verifies the exact original outgoing message key and account before
 requesting delete-for-everyone. Requests outside two days are marked Expired.

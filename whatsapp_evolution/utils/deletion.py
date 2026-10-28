@@ -34,11 +34,11 @@ def invoice_deleted(doc, method=None):
         if not row:
             continue
         _queue_deletion(row, doc.doctype, doc.name)
-        # Retain the message/audit trail without a Dynamic Link that would
-        # prevent the source document's authorized deletion. All changes roll
-        # back if any other source deletion check fails.
-        frappe.db.set_value("WhatsApp Message", row.name,
-                            {"reference_doctype": "", "reference_name": ""})
+        # The source deletion was already authorized by ERPNext. Cascade only
+        # its exact linked messages even if that user lacks WhatsApp delete
+        # permission. Normal delete hooks/link checks still run; a failure
+        # rolls back the source, messages and audit requests together.
+        frappe.delete_doc("WhatsApp Message", row.name, ignore_permissions=True)
 
 
 def message_deleted(doc, method=None):
