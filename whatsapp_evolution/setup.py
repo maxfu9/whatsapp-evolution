@@ -158,6 +158,7 @@ def _ensure_workspace():
         {"type": "Card Break", "label": "Reports", "hidden": 0, "is_query_report": 0, "link_count": 0, "onboard": 0},
         {"type": "Link", "label": "Bulk WhatsApp Status", "link_to": "Bulk WhatsApp Status", "link_type": "Report", "hidden": 0, "is_query_report": 1, "link_count": 0, "onboard": 0},
         {"type": "Link", "label": "WhatsApp Notification Log", "link_to": "WhatsApp Notification Log", "link_type": "DocType", "hidden": 0, "is_query_report": 0, "link_count": 0, "onboard": 0},
+        {"type": "Link", "label": "WhatsApp Deletion Request", "link_to": "WhatsApp Deletion Request", "link_type": "DocType", "hidden": 0, "is_query_report": 0, "link_count": 0, "onboard": 0},
     ]
     _save_standard_doc(
         "Workspace",
@@ -192,6 +193,7 @@ def _ensure_workspace_sidebar():
         {"type": "Section Break", "label": "Logs & Reports", "link_type": "DocType", "icon": "file-text", "indent": 1, "child": 0, "collapsible": 1, "keep_closed": 0, "show_arrow": 0},
         {"type": "Link", "label": "WhatsApp Notification", "link_to": "WhatsApp Notification", "link_type": "DocType", "indent": 0, "child": 1, "collapsible": 1, "keep_closed": 0, "show_arrow": 0},
         {"type": "Link", "label": "WhatsApp Notification Log", "link_to": "WhatsApp Notification Log", "link_type": "DocType", "indent": 0, "child": 1, "collapsible": 1, "keep_closed": 0, "show_arrow": 0},
+        {"type": "Link", "label": "WhatsApp Deletion Request", "link_to": "WhatsApp Deletion Request", "link_type": "DocType", "indent": 0, "child": 1, "collapsible": 1, "keep_closed": 0, "show_arrow": 0},
         {"type": "Link", "label": "Bulk WhatsApp Status", "link_to": "Bulk WhatsApp Status", "link_type": "Report", "indent": 0, "child": 1, "collapsible": 1, "keep_closed": 0, "show_arrow": 0},
     ]
     _save_standard_doc(

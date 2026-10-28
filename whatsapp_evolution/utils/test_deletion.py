@@ -80,6 +80,16 @@ class TestDeletionTriggers(TestCase):
                 fake.enqueue.assert_not_called()
 
 
+class TestDeletionNavigation(TestCase):
+    def test_migrate_setup_keeps_deletion_audit_visible(self):
+        from whatsapp_evolution import setup
+        with patch.object(setup,'_save_standard_doc') as save:
+            setup._ensure_workspace_sidebar()
+            self.assertTrue(any(x.get('link_to')=='WhatsApp Deletion Request' for x in save.call_args.args[2]['items']))
+            setup._ensure_workspace()
+            self.assertTrue(any(x.get('link_to')=='WhatsApp Deletion Request' for x in save.call_args.args[2]['links']))
+
+
 class TestDeletionWorker(TestCase):
     def run_worker(self, source_exists=False, post_rows=None, delete_code=201, delete_error=None):
         row=Row(name='request-id',status='Pending',source_doctype='WhatsApp Message',source_name='deleted-msg',
