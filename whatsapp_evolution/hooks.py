@@ -253,6 +253,7 @@ doc_events = {
         "on_update_after_submit": "whatsapp_evolution.whatsapp_evolution.sales_invoice_balance.update_sales_invoice_whatsapp_balances",
     },
     "Payment Entry": {
+        "on_trash": "whatsapp_evolution.utils.deletion.invoice_deleted",
         "validate": "whatsapp_evolution.whatsapp_evolution.payment_entry_balance.update_payment_entry_whatsapp_balances",
         "on_submit": "whatsapp_evolution.whatsapp_evolution.payment_entry_balance.update_payment_entry_whatsapp_balances",
         "on_update_after_submit": "whatsapp_evolution.whatsapp_evolution.payment_entry_balance.update_payment_entry_whatsapp_balances",

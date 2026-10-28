@@ -48,9 +48,9 @@ private File attachments (20 MB maximum); failed media downloads retain the
 message with an explicit warning. Unsupported active content is stored as a
 binary download, never as an HTML/SVG document.
 
-## Invoice-linked message deletion
+## Document-linked message deletion
 
-Deleting a Sales/Purchase Invoice, or deleting its linked outgoing WhatsApp
+Deleting a Sales Invoice, Purchase Invoice or Payment Entry, or its linked outgoing WhatsApp
 Message record, creates a separate WhatsApp Deletion Request. Cancellation
 alone does not request removal. Incoming and unrelated messages are not revoked.
 

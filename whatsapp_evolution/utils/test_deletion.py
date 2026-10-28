@@ -39,6 +39,27 @@ class TestDeletionTriggers(TestCase):
             self.assertEqual(fake.get_doc.call_args.args[0]['source_doctype'],'Sales Invoice')
             fake.db.set_value.assert_called_once_with('WhatsApp Message','message-record',{'reference_doctype':'','reference_name':''})
 
+    def test_payment_entry_message_delete_queues_request(self):
+        with patch.object(deletion,'frappe') as fake,patch.object(deletion,'_locked_message',return_value=message(reference_doctype='Payment Entry',reference_name='PAY-1')):
+            fake.db.exists.return_value=False
+            deletion.message_deleted(SimpleNamespace(name='message-record'))
+            self.assertTrue(fake.enqueue.call_args.kwargs['enqueue_after_commit'])
+            self.assertEqual(fake.get_doc.call_args.args[0]['reference_name'],'PAY-1')
+
+    def test_payment_entry_delete_preserves_source_in_audit(self):
+        with patch.object(deletion,'frappe') as fake,patch.object(deletion,'_locked_message',return_value=message(reference_doctype='Payment Entry',reference_name='PAY-1')):
+            fake.get_all.return_value=['message-record'];fake.db.exists.return_value=False
+            deletion.invoice_deleted(SimpleNamespace(doctype='Payment Entry',name='PAY-1'))
+            data=fake.get_doc.call_args.args[0]
+            self.assertEqual(data['source_doctype'],'Payment Entry')
+            self.assertEqual(data['reference_doctype'],'Payment Entry')
+            fake.db.set_value.assert_called_once_with('WhatsApp Message','message-record',{'reference_doctype':'','reference_name':''})
+
+    def test_payment_entry_hook_is_delete_only(self):
+        from whatsapp_evolution.hooks import doc_events
+        self.assertEqual(doc_events['Payment Entry']['on_trash'],'whatsapp_evolution.utils.deletion.invoice_deleted')
+        self.assertNotIn('on_cancel',doc_events['Payment Entry'])
+
     def test_active_send_blocks_delete(self):
         with patch.object(deletion,'frappe') as fake,patch.object(deletion,'_locked_message',return_value=message(status='Started')):
             fake.throw.side_effect=ValueError('send in progress')

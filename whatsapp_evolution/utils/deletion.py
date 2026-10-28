@@ -1,4 +1,4 @@
-"""Revoke invoice-linked outgoing messages only after local deletion commits."""
+"""Revoke supported document-linked messages after local deletion commits."""
 
 import hashlib
 import time
@@ -9,7 +9,7 @@ import frappe
 import requests
 from frappe.utils import get_datetime, now_datetime
 
-INVOICES = {"Sales Invoice", "Purchase Invoice"}
+SUPPORTED_DOCUMENTS = {"Sales Invoice", "Purchase Invoice", "Payment Entry"}
 
 
 def _locked_message(name):
@@ -35,15 +35,15 @@ def invoice_deleted(doc, method=None):
             continue
         _queue_deletion(row, doc.doctype, doc.name)
         # Retain the message/audit trail without a Dynamic Link that would
-        # prevent the invoice's authorized deletion. All changes roll back if
-        # any other invoice deletion check fails.
+        # prevent the source document's authorized deletion. All changes roll
+        # back if any other source deletion check fails.
         frappe.db.set_value("WhatsApp Message", row.name,
                             {"reference_doctype": "", "reference_name": ""})
 
 
 def message_deleted(doc, method=None):
     row = _locked_message(doc.name)
-    if not row or row.reference_doctype not in INVOICES:
+    if not row or row.reference_doctype not in SUPPORTED_DOCUMENTS:
         return
     _check_not_sending(row)
     _queue_deletion(row, "WhatsApp Message", doc.name)

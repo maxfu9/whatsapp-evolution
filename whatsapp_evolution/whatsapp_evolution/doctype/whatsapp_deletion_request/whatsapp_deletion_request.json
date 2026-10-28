@@ -8,7 +8,7 @@
   {"fieldname":"whatsapp_account","fieldtype":"Link","options":"WhatsApp Account","label":"WhatsApp Account"},
   {"fieldname":"recipient","fieldtype":"Data","label":"Recipient"},
   {"fieldname":"reference_doctype","fieldtype":"Data","label":"Original Reference Type"},
-  {"fieldname":"reference_name","fieldtype":"Data","label":"Original Invoice","in_list_view":1},
+  {"fieldname":"reference_name","fieldtype":"Data","label":"Original Document","in_list_view":1},
   {"fieldname":"source_doctype","fieldtype":"Data","label":"Deleted Record Type"},
   {"fieldname":"source_name","fieldtype":"Data","label":"Deleted Record Name"},
   {"fieldname":"requested_by","fieldtype":"Data","label":"Requested By"},
