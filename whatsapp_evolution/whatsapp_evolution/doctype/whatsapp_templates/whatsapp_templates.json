@@ -11,6 +11,7 @@
   "actual_name",
   "column_break_bthp",
   "id",
+  "status",
   "section_break_fxqh",
   "template",
   "sample_values",
@@ -87,6 +88,12 @@
    "fieldname": "id",
    "fieldtype": "Data",
    "label": "ID",
+   "read_only": 1
+  },
+  {
+   "fieldname": "status",
+   "fieldtype": "Data",
+   "label": "Provider Status",
    "read_only": 1
   },
   {

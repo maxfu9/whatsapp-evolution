@@ -79,6 +79,16 @@ class TestFreshDeskSetup(TestCase):
             fake.get_doc.return_value.save.assert_called_once_with(ignore_permissions=True)
             fake.get_doc.return_value.insert.assert_not_called()
 
+    def test_v16_sidebar_uses_standard_file_import(self):
+        """Standard sidebars need the framework import lifecycle on v16."""
+        from whatsapp_evolution import setup
+        with patch.object(setup, "frappe") as fake, patch.object(setup, "import_file_by_path") as importer:
+            fake.db.table_exists.return_value = True
+            fake.get_app_path.return_value = "/app/sidebar.json"
+            setup._ensure_workspace_sidebar()
+            importer.assert_called_once_with("/app/sidebar.json", force=True)
+            fake.get_doc.assert_not_called()
+
 
 class TestAttachmentPaths(TestCase):
     """Unknown URLs must raise a useful error, never return an unbound variable."""

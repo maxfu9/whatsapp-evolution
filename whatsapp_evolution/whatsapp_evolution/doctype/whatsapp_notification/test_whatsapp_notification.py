@@ -192,8 +192,8 @@ class TestWhatsAppNotification(IntegrationTestCase):
 
     @patch("whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_notification.whatsapp_notification._was_recently_sent", return_value=False)
     @patch("whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_notification.whatsapp_notification.EvolutionProvider.send_message")
-    def test_send_template_message_without_field_name_uses_auto_resolution(self, mock_send, _mock_recent):
-        """Test auto-recipient resolution when field_name is left blank."""
+    def test_send_template_message_without_field_name_does_not_send(self, mock_send, _mock_recent):
+        """An unconfigured recipient must not implicitly select a user's phone."""
         mock_send.return_value = {"id": "wamid.notif_auto_1"}
 
         doc = self._make_notification(
@@ -206,8 +206,7 @@ class TestWhatsAppNotification(IntegrationTestCase):
         user.save(ignore_permissions=True)
         doc.send_template_message(user, from_queue=True)
 
-        self.assertTrue(mock_send.called)
-        self.assertEqual(mock_send.call_args.args[0], "919900112234")
+        mock_send.assert_not_called()
 
     @patch("whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_notification.whatsapp_notification._was_recently_sent", return_value=False)
     @patch("whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_notification.whatsapp_notification.EvolutionProvider.send_message")

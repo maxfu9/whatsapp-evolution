@@ -4,6 +4,7 @@ import frappe
 from frappe import _
 from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
 from frappe.custom.doctype.property_setter.property_setter import make_property_setter
+from frappe.modules.import_file import import_file_by_path
 
 
 APP_NAME = "whatsapp_evolution"
@@ -182,6 +183,13 @@ def _ensure_workspace():
 
 
 def _ensure_workspace_sidebar():
+    if frappe.db.table_exists("Sidebar"):
+        # Standard v16 sidebars are file-backed app content. The framework's
+        # importer handles installation without enabling developer mode.
+        import_file_by_path(frappe.get_app_path(
+            APP_NAME, "whatsapp_evolution", "sidebar", "whatsapp_evolution.json"
+        ), force=True)
+        return
     items = [
         {"type": "Link", "label": MODULE_NAME, "link_to": MODULE_NAME, "link_type": "Workspace", "icon": "message-circle", "indent": 0, "child": 0, "collapsible": 1, "keep_closed": 0, "show_arrow": 0},
         {"type": "Link", "label": "WhatsApp Message", "link_to": "WhatsApp Message", "link_type": "DocType", "icon": "message-square", "indent": 0, "child": 0, "collapsible": 1, "keep_closed": 0, "show_arrow": 0},
@@ -199,7 +207,7 @@ def _ensure_workspace_sidebar():
         {"type": "Link", "label": "Bulk WhatsApp Status", "link_to": "Bulk WhatsApp Status", "link_type": "Report", "indent": 0, "child": 1, "collapsible": 1, "keep_closed": 0, "show_arrow": 0},
     ]
     _save_standard_doc(
-        "Sidebar" if frappe.db.table_exists("Sidebar") else "Workspace Sidebar",
+        "Workspace Sidebar",
         MODULE_NAME,
         {
             "title": MODULE_NAME,

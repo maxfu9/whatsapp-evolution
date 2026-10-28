@@ -17,18 +17,18 @@ jobs:
     env:
       FRAPPE_STREAM_LOGGING: "1"
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/checkout@v7.0.1
         with:
           repository: frappe/frappe
           ref: v16.25.0
           path: .ci-deps/frappe
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
         with:
           repository: frappe/erpnext
           ref: v16.26.1
           path: .ci-deps/erpnext
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7.1.0
         with:
           python-version: "3.14"
           cache: pip
@@ -53,7 +53,7 @@ jobs:
           whatsapp_evolution.utils.test_utils.TestEvolutionProviderV2
       - name: Upload complete lint report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: pylint-report
           path: artifacts/pylint.json
