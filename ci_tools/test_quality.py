@@ -88,6 +88,9 @@ class TestFreshDeskSetup(TestCase):
             setup._ensure_workspace_sidebar()
             importer.assert_called_once_with("/app/sidebar.json", force=True)
             fake.get_doc.assert_not_called()
+        path = Path(__file__).resolve().parents[1] / "whatsapp_evolution/whatsapp_evolution/sidebar/whatsapp_evolution.json"
+        sidebar = json.loads(path.read_text(encoding="utf-8"))
+        self.assertTrue(any(item.get("link_to") == "WhatsApp Deletion Request" for item in sidebar["items"]))
 
 
 class TestAttachmentPaths(TestCase):
