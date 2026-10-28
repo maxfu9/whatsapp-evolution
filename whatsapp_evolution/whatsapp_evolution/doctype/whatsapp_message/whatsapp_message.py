@@ -692,8 +692,8 @@ class WhatsAppMessage(Document):
             self.label = f"Phone: {to_number}"
 
     def after_insert(self):
-        # Timeline entries are rendered directly from WhatsApp Message docs.
-        return
+        if getattr(self.flags, "queue_send", False):
+            enqueue_existing_message(self.name)
 
     def on_update(self):
         self.update_profile_name()
@@ -748,6 +748,11 @@ class WhatsAppMessage(Document):
         if getattr(self.flags, "skip_send", False):
             if not self.status:
                 self.status = "Success"
+            return
+
+        if self.type == "Outgoing" and not self.message_id and not getattr(self.flags, "send_now", False):
+            self.status = "Queued"
+            self.flags.queue_send = True
             return
 
         self.set_whatsapp_account()
@@ -1102,8 +1107,41 @@ class WhatsAppMessage(Document):
         frappe.throw(_("Read receipts are not supported in Evolution mode."))
 
 
+def enqueue_existing_message(name):
+    frappe.enqueue(
+        "whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_message.whatsapp_message.send_existing_message",
+        queue="short", job_id=send_job_id(name), enqueue_after_commit=True, name=name,
+    )
+
+
+def send_existing_message(name):
+    queued = frappe.get_doc("WhatsApp Message", name)
+    if queued.message_type == "Template":
+        return send_template_now(to=queued.to, reference_doctype=queued.reference_doctype,
+            reference_name=queued.reference_name, template=queued.template, attach=queued.attach,
+            whatsapp_account=queued.whatsapp_account, queued_message_name=name)
+    if not start_queued_message(name):
+        return
+    doc = frappe.get_doc("WhatsApp Message", name)
+    try:
+        doc.flags.send_now = True
+        doc.before_insert()
+        doc.db_update()
+    except Exception as exc:
+        frappe.db.set_value("WhatsApp Message", name, {
+            "status": (doc.status or "Success") if doc.message_id else send_status(error=exc),
+            "message_id": doc.message_id or "", "last_error": str(exc),
+        })
+        frappe.log_error(frappe.get_traceback(), "WhatsApp Queued Send Failed")
+    if doc.bulk_message_reference:
+        bulk = frappe.get_doc("Bulk WhatsApp Message", doc.bulk_message_reference)
+        bulk.update_progress()
+    frappe.db.commit()
+
+
 def on_doctype_update():
     frappe.db.add_index("WhatsApp Message", ["reference_doctype", "reference_name"])
+    frappe.db.add_index("WhatsApp Message", ["whatsapp_account", "message_id", "type"])
 
 
 @frappe.whitelist()
@@ -1252,6 +1290,7 @@ def send_template_now(
             # Queue placeholders are pre-created with a synthetic message_id.
             # Reset it and invoke send flow explicitly for existing docs.
             sent_doc.message_id = ""
+            sent_doc.flags.send_now = True
             sent_doc.before_insert()
             sent_doc.db_update()
         
@@ -1399,6 +1438,7 @@ def send_custom_now(
             # Queue placeholders are pre-created with a synthetic message_id.
             # Reset it and invoke send flow explicitly for existing docs.
             sent_doc.message_id = ""
+            sent_doc.flags.send_now = True
             sent_doc.before_insert()
             sent_doc.db_update()
 

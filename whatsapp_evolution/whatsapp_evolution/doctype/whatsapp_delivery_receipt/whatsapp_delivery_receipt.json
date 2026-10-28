@@ -1,0 +1,17 @@
+{
+ "doctype": "DocType", "name": "WhatsApp Delivery Receipt", "module": "WhatsApp Evolution",
+ "autoname": "prompt", "engine": "InnoDB", "track_changes": 0,
+ "field_order": ["whatsapp_account", "message_id", "status", "received_on", "applied"],
+ "fields": [
+  {"fieldname": "whatsapp_account", "fieldtype": "Link", "options": "WhatsApp Account", "label": "WhatsApp Account", "reqd": 1, "in_list_view": 1},
+  {"fieldname": "message_id", "fieldtype": "Data", "label": "Message ID", "reqd": 1, "search_index": 1},
+  {"fieldname": "status", "fieldtype": "Data", "label": "Status", "reqd": 1, "in_list_view": 1},
+  {"fieldname": "received_on", "fieldtype": "Datetime", "label": "Confirmed On", "in_list_view": 1},
+  {"fieldname": "applied", "fieldtype": "Check", "label": "Applied", "default": "0", "search_index": 1}
+ ],
+ "permissions": [
+  {"role": "System Manager", "read": 1, "report": 1},
+  {"role": "WhatsApp Manager", "read": 1, "report": 1}
+ ],
+ "sort_field": "creation", "sort_order": "DESC"
+}

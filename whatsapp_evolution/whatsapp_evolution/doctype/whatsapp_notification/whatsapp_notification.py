@@ -604,7 +604,7 @@ class WhatsAppNotification(Document):
                 return
 
         delay_seconds = frappe.utils.cint(self.get("delay_seconds") or 0)
-        if delay_seconds > 0 and not from_queue:
+        if not from_queue:
             frappe.enqueue(
                 "whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_notification.whatsapp_notification.send_template_message_job",
                 queue="short",
@@ -1097,7 +1097,12 @@ class WhatsAppNotification(Document):
                     if df and df.fieldtype in frappe.model.numeric_fieldtypes:
                         value = frappe.utils.cint(value)
                     if df:
-                        frappe.db.set_value(_doc_value(doc_data, "doctype"), _doc_value(doc_data, "name"), fieldname, value)
+                        try:
+                            frappe.db.set_value(_doc_value(doc_data, "doctype"), _doc_value(doc_data, "name"), fieldname, value)
+                        except Exception:
+                            # The send already succeeded; a local field update
+                            # must not trigger another send through a fallback.
+                            frappe.log_error(frappe.get_traceback(), "WhatsApp Post-send Field Update Failed")
             success = True
         except Exception as e:
             error_message = str(e)

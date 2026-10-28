@@ -10,6 +10,10 @@
   "type",
   "status",
   "last_error",
+  "sent_at",
+  "delivered_at",
+  "read_at",
+  "receipt_checked_at",
   "to",
   "from",
   "profile_name",
@@ -37,6 +41,10 @@
   "reference_name"
  ],
  "fields": [
+  {"fieldname": "sent_at", "fieldtype": "Datetime", "label": "Sent Confirmed On", "read_only": 1},
+  {"fieldname": "delivered_at", "fieldtype": "Datetime", "label": "Delivery Confirmed On", "read_only": 1},
+  {"fieldname": "read_at", "fieldtype": "Datetime", "label": "Read Confirmed On", "read_only": 1},
+  {"fieldname": "receipt_checked_at", "fieldtype": "Datetime", "label": "Last Receipt Check", "read_only": 1},
   {
    "allow_in_quick_entry": 1,
    "fieldname": "label",

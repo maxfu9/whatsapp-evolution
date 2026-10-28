@@ -482,6 +482,18 @@ class EvolutionProvider(BaseProvider):
             message = payload.get("message") or {}
             key = payload.get("key") or {}
 
+            for _ in range(3):
+                wrapped = next((message.get(k) for k in (
+                    "ephemeralMessage", "viewOnceMessage", "viewOnceMessageV2", "documentWithCaptionMessage"
+                ) if message.get(k)), None)
+                if not isinstance(wrapped, dict):
+                    break
+                message = wrapped.get("message") or message
+            media_type, media = next(((kind, message[field]) for kind, field in (
+                ("image", "imageMessage"), ("document", "documentMessage"),
+                ("audio", "audioMessage"), ("video", "videoMessage")
+            ) if isinstance(message.get(field), dict)), ("text", {}))
+
             # Extract number
             sender = (
                 key.get("remoteJid")
@@ -499,6 +511,7 @@ class EvolutionProvider(BaseProvider):
                 or (message.get("extendedTextMessage") or {}).get("text")
                 or (message.get("imageMessage") or {}).get("caption")
                 or (message.get("videoMessage") or {}).get("caption")
+                or media.get("caption")
                 or ""
             )
 
@@ -509,6 +522,12 @@ class EvolutionProvider(BaseProvider):
                 "message_id": key.get("id"),
                 "timestamp": payload.get("messageTimestamp"),
                 "is_from_me": key.get("fromMe", False),
+                "content_type": media_type,
+                "media_key": key,
+                "media_base64": payload.get("base64") or message.get("base64"),
+                "media_filename": media.get("fileName"),
+                "media_mimetype": media.get("mimetype"),
+                "profile_name": payload.get("pushName"),
             }
 
         elif event == "messages.update":
@@ -755,9 +774,12 @@ def _account_name_from_instance(instance_name):
     )
 
 
-@frappe.whitelist(allow_guest=True)
+@frappe.whitelist(allow_guest=True, methods=["POST"])
 def handle_webhook():
     request = frappe.local.request
+    from whatsapp_evolution.utils.receipts import authenticate_webhook
+    if not authenticate_webhook(request):
+        return "Unauthorized webhook"
     data = request.get_json(silent=True) or frappe._dict(frappe.form_dict)
     if not data:
         return "No payload"
@@ -766,7 +788,7 @@ def handle_webhook():
 
     # Read receipts can arrive after other updates in the same batch. Process
     # every entry, retaining the envelope's instance for account matching.
-    if _normalize_event_type(data.get("event")) == "messages.update" and isinstance(data.get("data"), list):
+    if isinstance(data.get("data"), list):
         for receipt in data["data"]:
             if not isinstance(receipt, dict):
                 continue
@@ -788,14 +810,16 @@ def _handle_webhook_payload(data):
         payload_data = _normalize_webhook_data(data)
         instance_name = _extract_instance_name(data, payload_data)
         account_name = _account_name_from_instance(instance_name)
+        if not account_name:
+            return "Ignored event for unknown account"
 
         if event_type == "messages.upsert":
             if msg.get("is_from_me"):
                 # Update outgoing message status if we find it by ID
                 if msg.get("message_id"):
                     found = _find_message_name_by_id(msg.get("message_id"), account_name) if account_name else None
-                    if found and _status_rank("Sent") >= _status_rank(found.get("status")):
-                        frappe.db.set_value("WhatsApp Message", found.get("name"), "status", "Sent")
+                    from whatsapp_evolution.utils.receipts import apply_receipt
+                    apply_receipt(account_name, msg.get("message_id"), "Sent")
                 return "OK"
 
             from whatsapp_evolution.incoming import handle_incoming_message
@@ -833,7 +857,8 @@ def _handle_webhook_payload(data):
                     # A phone-number match is not evidence for this message.
                     # Never apply a receipt to another send to the same person.
                     if found and _status_rank(status_text) >= _status_rank(found.get("status")):
-                        frappe.db.set_value("WhatsApp Message", found.get("name"), "status", status_text)
+                        from whatsapp_evolution.utils.receipts import apply_receipt
+                        apply_receipt(account_name, message_id, status_text)
                         _log_webhook_debug(
                             {
                                 "event": "messages.update.applied",
@@ -845,6 +870,9 @@ def _handle_webhook_payload(data):
                             }
                         )
                     else:
+                        if message_id:
+                            from whatsapp_evolution.utils.receipts import apply_receipt
+                            apply_receipt(account_name, message_id, status_text)
                         _log_webhook_debug(
                             {
                                 "event": "messages.update.skipped",

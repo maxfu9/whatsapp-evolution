@@ -29,12 +29,18 @@ class TestReceiptWebhook(TestCase):
         if batch is not None:
             payload["data"] = batch
         with patch.object(evolution, "frappe") as fake, \
+             patch("whatsapp_evolution.utils.receipts.authenticate_webhook", return_value=True), \
+             patch("whatsapp_evolution.utils.receipts.apply_receipt") as apply, \
              patch.object(evolution, "_account_name_from_instance", return_value=account), \
              patch.object(evolution, "_log_webhook_debug"), \
              patch.object(evolution, "_find_recent_outgoing_by_number") as fallback:
             fake.local.request.get_json.return_value = payload
             fake.get_single.return_value.as_dict.return_value = {}
             fake.get_all.return_value = [{"name": "target-message", "status": current}] if found else []
+            def apply_to_fake(account, message_id, status):
+                if found and evolution._status_rank(status) > evolution._status_rank(current):
+                    fake.db.set_value("WhatsApp Message", "target-message", "status", status)
+            apply.side_effect = apply_to_fake
             handler = evolution.handle_webhook
             while hasattr(handler, "__wrapped__"):
                 handler = handler.__wrapped__

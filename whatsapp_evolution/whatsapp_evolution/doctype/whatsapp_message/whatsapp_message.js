@@ -10,29 +10,18 @@ frappe.ui.form.on('WhatsApp Message', {
 			});
 		}
 
-		// add custom button to send read receipt
-		add_mark_as_read(frm);
+		if (!frm.is_new() && frm.doc.type === 'Outgoing' && frm.doc.message_id) {
+			frm.add_custom_button(__('Refresh Status'), async () => {
+				await frappe.call({method: 'whatsapp_evolution.utils.receipts.refresh_message_status',
+					args: {name: frm.doc.name}, freeze: true});
+				await frm.reload_doc();
+			});
+		}
+		if (!frm._whatsapp_status_listener) {
+			frm._whatsapp_status_listener = data => {
+				if (data.doctype === frm.doctype && data.name === frm.doc.name && !frm.is_dirty()) frm.reload_doc();
+			};
+			frappe.realtime.on('doc_update', frm._whatsapp_status_listener);
+		}
 	}
 });
-
-// custom button
-function add_mark_as_read(frm){
-	if(frm.doc.type === "Outgoing" || frm.doc.status == "marked as read" || !frm.doc.message_id)
-		return
-
-	frm.add_custom_button(__('Mark as read'), function(){
-		send_read_receipt(frm);
-	});
-}
-
-function send_read_receipt(frm) {
-	frappe.call({
-		doc: frm.doc,
-		method: "send_read_receipt",
-		callback: function(r) {
-			if (r && r.message) {
-				frappe.msgprint(__('Marked as read'));
-			}
-		}
-	});
-}

@@ -12,6 +12,7 @@ from whatsapp_evolution.whatsapp_evolution.doctype.whatsapp_message.whatsapp_mes
     _is_evolution_enabled_global,
     _parse_body_param,
     _render_template_text,
+    enqueue_existing_message,
 )
 
 # Add these files to your whatsapp_evolution app
@@ -116,6 +117,9 @@ class BulkWhatsAppMessage(Document):
         for index, recipient in enumerate(recipients, start=1):
             if not self.create_single_message(recipient):
                 any_failure = True
+            # This worker runs after the submitted bulk document committed.
+            # Release each recipient's after-commit job before the rate delay.
+            frappe.db.commit()
 
             if index < total_recipients and delay_between_messages:
                 time.sleep(delay_between_messages)
@@ -126,18 +130,14 @@ class BulkWhatsAppMessage(Document):
         )
         self.reload()
 
-        if any_failure or failed_count:
-            self.db_set("status", "Partially Failed")
-        elif cint(self.sent_count) >= cint(self.recipient_count):
-            self.db_set("status", "Completed")
-        else:
-            self.db_set("status", "Partially Failed")
+        self.update_progress()
     
     def create_single_message(self, recipient):
         """Create a single message in the queue"""
         recipient_data = self._parse_recipient_data(recipient)
 
         wa_message = frappe.new_doc("WhatsApp Message")
+        wa_message.type = "Outgoing"
         wa_message.to = recipient.get("mobile_number")
         wa_message.flags.custom_ref_doc = recipient_data
         wa_message.bulk_message_reference = self.name
@@ -180,7 +180,9 @@ class BulkWhatsAppMessage(Document):
                 message=frappe.get_traceback(),
             )
             return False
-        if wa_message.status not in {"Success", "Sent", "Delivered", "Read"}:
+        if wa_message.status == "Queued":
+            return True
+        if wa_message.status not in {"Success", "Sent", "Delivered", "Read", "Played"}:
             # Suppressed duplicates and uncertain outcomes are not new sends.
             self.db_set("status", "Partially Failed")
             return False
@@ -219,13 +221,16 @@ class BulkWhatsAppMessage(Document):
 
         return _render_template_text(template_text, params)
 
+    @frappe.whitelist()
     def retry_failed(self):
         """Retry failed messages"""
+        self.check_permission("write")
         failed_messages = frappe.get_all(
             "WhatsApp Message",
             filters={
                 "bulk_message_reference": self.name,
-                "status": "Failed"
+                "status": "Failed",
+                "message_id": ["is", "not set"],
             },
             fields=["name"]
         )
@@ -233,18 +238,26 @@ class BulkWhatsAppMessage(Document):
         count = 0
         for msg in failed_messages:
             message_doc = frappe.get_doc("WhatsApp Message", msg.name)
-            message_doc.status = "Queued"
-            message_doc.save(ignore_permissions=True)
+            frappe.db.set_value("WhatsApp Message", msg.name, {"status": "Queued", "last_error": "", "message_id": ""})
+            enqueue_existing_message(msg.name)
             count += 1
         
         frappe.msgprint(_("{0} messages have been requeued for sending").format(count))
+
+    def update_progress(self):
+        rows = frappe.get_all("WhatsApp Message", filters={"bulk_message_reference": self.name},
+                              fields=["status"], limit_page_length=0)
+        sent = sum(row.status in {"Success", "Sent", "Delivered", "Read", "Played"} for row in rows)
+        pending = any(row.status in {"Queued", "Started"} for row in rows)
+        status = "In Progress" if pending else ("Completed" if sent >= self.recipient_count else "Partially Failed")
+        self.db_set({"sent_count": sent, "status": status})
         
     def get_progress(self):
         """Get sending progress for this bulk message"""
         total = self.recipient_count
         sent = frappe.db.count("WhatsApp Message", {
             "bulk_message_reference": self.name,
-            "status": ["in", ["sent","delivered", "Success", "read"]]
+            "status": ["in", ["Sent", "Delivered", "Success", "Read", "Played"]]
         })
         failed = frappe.db.count("WhatsApp Message", {
             "bulk_message_reference": self.name,
